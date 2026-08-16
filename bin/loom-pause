@@ -1,0 +1,15 @@
+#!/bin/bash
+# loom-pause — pause/unpause an in-flight recording (gsr SIGUSR2).
+#
+# The flag file is the only record of the state: gsr can't be asked whether it is paused. It used
+# to drive a custom bar indicator; Quattro's built-in one (omarchy.indicators / ScreenRecording)
+# only knows recording vs not, so the toggle announces itself with a notification instead.
+pgrep -f '^gpu-screen-recorder' >/dev/null || exit 0
+pkill -SIGUSR2 -f '^gpu-screen-recorder'
+if [[ -f /tmp/loom-paused ]]; then
+  rm -f /tmp/loom-paused
+  omarchy-notification-send -t 2000 "Recording resumed"
+else
+  touch /tmp/loom-paused
+  omarchy-notification-send -t 2000 "Recording paused" "Super + Alt + P to resume"
+fi

@@ -1,0 +1,24 @@
+#!/bin/bash
+# loom — screen recording with a circular webcam overlay. Run again to stop.
+set -u
+
+GSR='^gpu-screen-recorder'
+PAUSED=/tmp/loom-paused
+
+if pgrep -f "$GSR" >/dev/null; then
+  # No un-pause needed first: gsr 6.0.0 saves a valid file on SIGINT while paused (tested).
+  rm -f "$PAUSED"
+  exec omarchy-capture-screenrecording # stops, saves, kills the cam overlay itself
+fi
+
+# Also clear it on START: a recording stopped by ALT PRINT or by the bar's ScreenRecording
+# indicator skips loom's stop path, so a leftover flag would report the next recording as paused.
+rm -f "$PAUSED"
+
+# Recorder FIRST: it returns once gsr is up, so nothing extra is in the slurp picker.
+# gsr running is the signal, not the exit code: a cancelled picker and a failed start both come
+# back non-zero, and the exit code says nothing about whether an overlay would be orphaned.
+omarchy-capture-screenrecording --with-microphone-audio
+pgrep -f "$GSR" >/dev/null || exit 1 # picker cancelled -> no orphan overlay
+
+exec loom-cam "$@" # "$@" = optional /dev/videoN override

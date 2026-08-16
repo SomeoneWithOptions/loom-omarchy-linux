@@ -1,0 +1,98 @@
+#!/bin/bash
+# loom-cam — the circular webcam overlay. Drag to move, drag an edge to resize.
+#
+# mpv, not ffplay: ffplay forces its window back to the video size, so it snaps back the instant
+# you resize it. mpv honours compositor resizes.
+#
+# The circle is the video's alpha channel (a mask merged into the frames), not a Hyprland
+# rounding rule, so it scales with the window instead of staying at a fixed radius.
+set -u
+
+MASK=/tmp/loom-mask.png
+CAM_TITLE=WebcamOverlay
+# Inset from the screen corner. Also set `loom.margin` in hypr/loom.lua if you change it, or the
+# overlay hops once on launch — the window rule places it roughly, this places it exactly.
+MARGIN=${LOOM_MARGIN:-40}
+
+# Pick order: explicit argument, $LOOM_CAM, first external camera, first camera at all.
+# Plain enumeration order always loses to the laptop: the built-in camera is /dev/video0 and an
+# external one lands on video4+. Prefer a by-id path over /dev/videoN — udev keeps those names
+# stable across reboots and re-plugs, while the numbers shift. -video-index0 is the capture
+# node; -index1 is the metadata node, which has no formats to play.
+device="${1:-${LOOM_CAM:-}}"
+if [[ -z $device ]]; then
+  mapfile -t cams < <(ls /dev/v4l/by-id/*-video-index0 2>/dev/null)
+  for c in ${cams[@]+"${cams[@]}"}; do
+    [[ $c =~ [Ii]ntegrated|[Bb]uilt[-_]?[Ii]n ]] || {
+      device=$c
+      break
+    }
+  done
+  device=${device:-${cams[0]:-}}
+  # by-id only exists once udev has run; fall back to enumeration order if it hasn't.
+  [[ -n $device ]] || device=$(v4l2-ctl --list-devices 2>/dev/null | grep -m1 '^[[:space:]]*/dev/video' | tr -d '\t')
+fi
+[[ -n $device ]] || {
+  notify-send "loom: no webcam found" -u critical
+  exit 1
+}
+
+# One 512px white-circle-on-black frame, generated once. geq is slow per-pixel, which is fine
+# for a single still and would not be for live video.
+[[ -f $MASK ]] || ffmpeg -y -v error -f lavfi -i "color=black:s=512x512" \
+  -vf "geq=lum='if(lte(hypot(X-256,Y-256),255),255,0)':cb=128:cr=128,format=gray" \
+  -frames:v 1 -update 1 "$MASK"
+
+# Safe in a script file (argv is just this path), unlike the same line typed into a shell.
+pkill -f "$CAM_TITLE" 2>/dev/null
+
+# setsar=1 is required: the v4l2 source carries a non-1 sample aspect that otherwise stretches
+# the circle into an egg. panscan=1.0 fills the window by cropping instead of letterboxing —
+# mpv paints letterbox padding opaque black even with background=none, which would put black
+# bars inside the overlay the moment you drag it off-square.
+mpv "av://v4l2:$device" --external-file="$MASK" \
+  --lavfi-complex='[vid1]crop=ih:ih,scale=512:512,setsar=1,format=yuva420p[v];[vid2]format=gray,scale=512:512,setsar=1[m];[v][m]alphamerge[vo]' \
+  --background=none --panscan=1.0 \
+  --wayland-app-id=loom-cam --title="$CAM_TITLE" \
+  --no-border --no-osc --no-audio --no-input-default-bindings \
+  --profile=low-latency --untimed \
+  >/dev/null 2>&1 &
+cam_pid=$!
+
+# Keep the window square, so a drag can't crop the circle. Hyprland 0.56 has no
+# `keepaspectratio` rule and mpv can't ask Wayland for an aspect-locked toplevel, so the axis
+# that moved most wins and the other follows it — grow or shrink, same behaviour.
+# ponytail: 100ms poll, because Hyprland emits no window-resize event to hook. Dies with mpv.
+(
+  pw=0 ph=0
+  while kill -0 "$cam_pid" 2>/dev/null; do
+    read -r w h <<<"$(hyprctl clients -j | jq -r '.[] | select(.class == "loom-cam") | "\(.size[0]) \(.size[1])"')"
+    if [[ -n ${w:-} && $w -ne $h ]]; then
+      dw=$((w > pw ? w - pw : pw - w))
+      dh=$((h > ph ? h - ph : ph - h))
+      n=$((dw >= dh ? w : h))
+      hyprctl dispatch "hl.dsp.window.resize({ window = \"class:loom-cam\", x = $n, y = $n })" >/dev/null
+      w=$n h=$n
+    fi
+    pw=${w:-0} ph=${h:-0}
+    sleep 0.1
+  done
+) >/dev/null 2>&1 &
+
+# Position after it maps, not with a `move` rule: mpv maps before it knows its own size, so a
+# rule evaluating window_w (or a percentage) lands the overlay in the middle of the screen.
+#
+# `hyprctl dispatch` takes Lua as of Quattro's Hyprland — the old
+# `movewindowpixel "exact X Y,class:..."` string now fails to parse and silently left the overlay
+# wherever the map rule put it, which is centre screen.
+for _ in {1..30}; do
+  read -r w h <<<"$(hyprctl clients -j | jq -r '.[] | select(.class == "loom-cam") | "\(.size[0]) \(.size[1])"')"
+  [[ -n ${w:-} ]] && break
+  sleep 0.1
+done
+if [[ -n ${w:-} ]]; then
+  # Monitor origin included: on a second display the logical origin isn't 0,0, and without it the
+  # overlay lands on the wrong screen (or off the edge of it).
+  read -r mx my mw mh <<<"$(hyprctl monitors -j | jq -r '.[] | select(.focused) | "\(.x) \(.y) \(.width / .scale | floor) \(.height / .scale | floor)"')"
+  hyprctl dispatch "hl.dsp.window.move({ window = \"class:loom-cam\", x = $((mx + mw - w - MARGIN)), y = $((my + mh - h - MARGIN)) })" >/dev/null
+fi
