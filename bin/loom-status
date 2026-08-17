@@ -1,0 +1,16 @@
+#!/bin/bash
+# Reports state only for recorder PID started by loom.
+state_dir=${XDG_RUNTIME_DIR:-/tmp}
+active=$state_dir/loom-recording.pid
+paused=$state_dir/loom-paused
+
+if [[ -r $active ]]; then
+  read -r pid <"$active"
+  if [[ $pid =~ ^[0-9]+$ ]] && pgrep -f '^gpu-screen-recorder' | grep -qx "$pid"; then
+    [[ -f $paused ]] && echo paused || echo recording
+    exit 0
+  fi
+fi
+
+rm -f "$active" "$paused"
+echo inactive

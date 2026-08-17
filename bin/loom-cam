@@ -10,9 +10,12 @@ set -u
 
 MASK=/tmp/loom-mask.png
 CAM_TITLE=WebcamOverlay
-# Inset from the screen corner. Also set `loom.margin` in hypr/loom.lua if you change it, or the
-# overlay hops once on launch — the window rule places it roughly, this places it exactly.
+# Inset from the screen corner, and opening diameter. Both are handed to the window rules below,
+# so one env var moves the rough placement and the exact one together.
 MARGIN=${LOOM_MARGIN:-40}
+SIZE=${LOOM_SIZE:-360}
+# readlink: this script normally runs from a ~/.local/bin symlink into the repo.
+REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 
 # Pick order: explicit argument, $LOOM_CAM, first external camera, first camera at all.
 # Plain enumeration order always loses to the laptop: the built-in camera is /dev/video0 and an
@@ -45,6 +48,15 @@ fi
 
 # Safe in a script file (argv is just this path), unlike the same line typed into a shell.
 pkill -f "$CAM_TITLE" 2>/dev/null
+
+# Register the window rules now, in the running Hyprland, instead of from ~/.config/hypr — loom
+# then owns every file it needs and nothing it installs is wiped by an omarchy update or a
+# dotfiles sync. `hyprctl keyword` is dead in Quattro ("keyword can't work with non-legacy
+# parsers. Use eval."); `eval` runs Lua in the config's own scope, so `o.window` is in reach.
+# Must be before mpv: rules are read once, at map time.
+# ponytail: re-registered per launch, so identical rules pile up until the next `hyprctl reload`.
+# Cheap (a few table entries), and it means an edit to loom.lua is live on the next launch.
+hyprctl eval "loom = { size = $SIZE, margin = $MARGIN }; dofile([[$REPO/hypr/loom.lua]])" >/dev/null
 
 # setsar=1 is required: the v4l2 source carries a non-1 sample aspect that otherwise stretches
 # the circle into an egg. panscan=1.0 fills the window by cropping instead of letterboxing —

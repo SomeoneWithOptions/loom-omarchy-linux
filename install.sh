@@ -1,18 +1,17 @@
 #!/bin/bash
-# Symlinks the loom scripts into ~/.local/bin and reloads Hyprland.
-# Edit in the repo, live immediately; `rm ~/.local/bin/loom*` to revert.
-#
-# Requires Omarchy Quattro (Hyprland configured in Lua). Quattro has no hyprland.conf or
-# bindings.conf, so this appends to the .lua files instead. Idempotent — safe to re-run, and
-# meant to be re-run if a dotfiles repo overwrites ~/.config/hypr.
+# Installs Loom commands, launcher, and Omarchy bar widget. Idempotent.
+# Scripts and plugin stay symlinked to this repo, so edits are live immediately.
+# Requires Omarchy Quattro (Hyprland configured in Lua and omarchy-shell).
 set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
 
-for cmd in hyprctl mpv ffmpeg jq v4l2-ctl; do
-  command -v "$cmd" >/dev/null || { echo "missing dependency: $cmd" >&2; exit 1; }
+for cmd in hyprctl mpv ffmpeg jq v4l2-ctl omarchy omarchy-shell; do
+  command -v "$cmd" >/dev/null ||
+    { echo "missing dependency: $cmd — install it (mpv: sudo pacman -S --needed mpv)" >&2; exit 1; }
 done
 
-chmod +x "$repo"/bin/* "$repo"/test/checks.sh
+chmod +x "$repo"/bin/* "$repo"/test/*.sh
 mkdir -p ~/.local/bin
 for f in "$repo"/bin/*; do ln -sfn "$f" ~/.local/bin/"$(basename "$f")"; done
 
@@ -31,24 +30,49 @@ Keywords=record;screen;capture;webcam;
 EOF
 update-desktop-database ~/.local/share/applications 2>/dev/null || true
 
-# dofile rather than `require`: the rules live in this repo, outside the package path Quattro
-# sets up for ~/.config/hypr modules. See hypr/loom.lua for what you can set before this line.
-grep -q 'hypr/loom.lua' ~/.config/hypr/hyprland.lua ||
-  printf '\n-- loom: circular webcam overlay\ndofile("%s/hypr/loom.lua")\n' "$repo" >>~/.config/hypr/hyprland.lua
+# Native Omarchy plugin: user-owned path, validated before enabling, hot-reloaded by the shell.
+shell_config=~/.config/omarchy/shell.json
+[[ ! -e $shell_config || -e $shell_config.pre-loom ]] || cp -a "$shell_config" "$shell_config.pre-loom"
+omarchy plugin validate "$repo/plugin"
+mkdir -p ~/.config/omarchy/plugins
+ln -sfnT "$repo/plugin" ~/.config/omarchy/plugins/loom.recording
+omarchy-shell shell rescanPlugins
+omarchy bar put loom.recording
+# Put recording status with system controls when that group exists. The surrounding custom pill
+# measures visible siblings, so it expands and contracts automatically with this transient widget.
+system_anchor=$(jq -r '[.bar.layout.right[] | select(type == "object") | .id // empty | select(test("\\.(tailscale|bluetooth|network|audio)$"))][0] // empty' "$shell_config")
+[[ -z $system_anchor ]] || omarchy bar move loom.recording --before "$system_anchor"
 
-# Quattro's webcam resize bindings sit on SUPER ALT BRACKETLEFT/BRACKETRIGHT, so SUPER ALT P is
-# free out of the box — no hl.unbind() needed. If you've taken it, Hyprland keeps the FIRST bind
-# for a duplicate combo, so this line would silently do nothing: check with
-# `omarchy menu keybindings --print` and edit the combo here.
-grep -q 'loom-pause' ~/.config/hypr/bindings.lua ||
-  printf '\n-- loom\no.bind("SUPER + ALT + P", "Pause recording", "%s/.local/bin/loom-pause")\n' "$HOME" >>~/.config/hypr/bindings.lua
+# Replace Omarchy's generic ScreenRecording indicator while preserving its other indicators.
+# An empty/missing items list means "all", so expand that case before excluding ScreenRecording.
+all_indicators=$(printf '%s\n' "$omarchy_path"/shell/plugins/bar/indicators/*.qml |
+  sed 's|.*/||; s/\.qml$//' | grep -v '^ScreenRecording$' | jq -R . | jq -s .)
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+jq --argjson all "$all_indicators" '
+  .bar.layout |= with_entries(
+    .value |= (
+      map(
+        if type == "object" and .id == "omarchy.indicators" then
+          if ((.items? // []) | length) == 0
+          then . + {items: $all}
+          else .items |= map(select(. != "ScreenRecording"))
+          end
+        else . end
+      ) | map(select(type != "object" or .id != "omarchy.indicators" or (.items | length) > 0))
+    )
+  )
+' "$shell_config" >"$tmp"
+if ! cmp -s "$shell_config" "$tmp"; then
+  mv "$tmp" "$shell_config"
+  omarchy-shell shell reloadConfig >/dev/null
+else
+  rm "$tmp"
+fi
 
-hyprctl reload >/dev/null
-hyprctl configerrors
+# Upgrade path: earlier versions appended these two lines to ~/.config/hypr. Nothing does now.
+sed -i '/loom: circular webcam overlay/,+1d' ~/.config/hypr/hyprland.lua 2>/dev/null || true
+sed -i '/^-- loom$/,+1d' ~/.config/hypr/bindings.lua 2>/dev/null || true
+rm -f /tmp/loom-paused
+
 echo "installed."
-
-# Recording indicator in the bar. Quattro ships one, which is why loom carries no status script of
-# its own: it polls for gpu-screen-recorder and stops the recording on click. Not written here — a
-# jq rewrite reflows the whole of shell.json, including the parts you hand-formatted.
-grep -q 'omarchy.indicators' ~/.config/omarchy/shell.json 2>/dev/null ||
-  echo 'one manual edit left: add { "id": "omarchy.indicators", "items": ["ScreenRecording"] } to bar.layout.right in ~/.config/omarchy/shell.json'

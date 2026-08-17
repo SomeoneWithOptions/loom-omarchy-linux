@@ -4,8 +4,8 @@ Loom-style screen recording on Hyprland/Omarchy: **circular webcam overlay, save
 No upload, no editor, no accounts.
 
 It's a thin wrapper around `omarchy-capture-screenrecording` (gpu-screen-recorder + slurp picker
-+ post-processing). The only things loom adds are the circular overlay — an mpv window whose
-circle lives in the video's alpha channel — and pause.
++ post-processing). Loom adds a circular mpv webcam overlay, pause support, and a native Omarchy recording-control
+panel.
 
 ## Install
 
@@ -18,47 +18,44 @@ git clone https://github.com/SomeoneWithOptions/loom-omarchy-linux ~/code/loom-o
 ~/code/loom-omarchy-linux/install.sh
 ```
 
-> **If you keep a dotfiles repo that copies over `~/.config`,** put loom's three config changes
-> (the `dofile` line, the keybind, the bar indicator) in *that* repo, or re-run `install.sh` after
-> it — otherwise they're wiped on the next sync. `install.sh` is idempotent, so re-running is the
-> cheap option.
+Symlinks `bin/*` into `~/.local/bin`, writes a launcher entry, and installs the native Omarchy
+bar plugin from `plugin/` into `~/.config/omarchy/plugins/loom.recording`. Scripts and plugin remain
+symlinked to the repo, so edits are live. `install.sh` validates and enables the plugin, places it
+with existing system controls when available, and saves the original shell config once as
+`~/.config/omarchy/shell.json.pre-loom`.
 
-Symlinks `bin/*` into `~/.local/bin`, appends a `dofile` line to `~/.config/hypr/hyprland.lua` and
-the pause keybind to `~/.config/hypr/bindings.lua` (both idempotent), then `hyprctl reload` and
-`hyprctl configerrors`. Edit files in the repo and they're live; `rm ~/.local/bin/loom*` plus those
-two lines reverts it.
+The window rules and the pause keybind are registered in the *running* Hyprland instead, by the
+scripts that need them:
 
-`dofile`, not `require`: the rules live in this repo, outside the package path Quattro sets up for
-`~/.config/hypr` modules.
+- `loom-cam` runs `hyprctl eval "…dofile([[…/hypr/loom.lua]])"` just before it starts mpv — rules
+  are read at map time, so registering them a moment earlier is as good as having them in the
+  config, and an edit to `loom.lua` is live on the next launch.
+- `loom` binds `SUPER ALT P` when a recording starts and unbinds it when it stops, so the key
+  exists only while it means something. If Hyprland reloads mid-recording the bind is lost until
+  the next recording; a leftover bind is harmless, `loom-pause` exits 0 with no recorder up.
 
-One edit `install.sh` will not make for you, because a `jq` rewrite reflows the entire file — the
-bar indicator in `~/.config/omarchy/shell.json`, under `bar.layout.right`:
+`eval`, not `keyword`: Quattro's parser answers *"keyword can't work with non-legacy parsers. Use
+eval."* `eval` runs Lua in the config's own scope, which is where `o.window`, `o.bind` and
+`hl.unbind` live.
 
-```json
-{ "id": "omarchy.indicators", "items": ["ScreenRecording"] }
-```
-
-That is Quattro's own indicator, not loom's: it polls for `gpu-screen-recorder`, shows only while
-recording, and stops the recording on click. `shell.json` hot-reloads on save.
+The plugin is a first-class Omarchy `bar-widget`, not a StatusNotifier tray process. It follows
+Omarchy's `Panel` / `BarIconButton` / `KeyboardPanel` pattern used by Wi-Fi and Bluetooth. Its red
+icon exists only while a recording started by `loom` is active; click it for Pause/Resume and Stop.
+The installer removes Omarchy's generic `ScreenRecording` indicator while preserving any other
+items in `omarchy.indicators`. Other Omarchy recordings therefore have no recording icon.
 
 ## Customize
 
-Set `loom` **before** the `dofile` line `install.sh` wrote into `~/.config/hypr/hyprland.lua`:
-
-```lua
-loom = { size = 480, margin = 24 }
-dofile(os.getenv("HOME") .. "/code/loom-omarchy-linux/hypr/loom.lua")
-```
+Environment, exported from your shell profile — `loom-cam` passes these into the window rules, so
+the rough placement and the exact one can't drift apart:
 
 | | | |
 |---|---|---|
-| `loom.size` | 360 | opening diameter in logical px — drag an edge to change it at runtime |
-| `loom.margin` | 40 | inset from the screen corner |
-| `$LOOM_MARGIN` | 40 | the same inset, for `loom-cam`, which does the real placement ~100ms after the window maps. Set both or the overlay hops once on launch — cosmetic if you don't |
+| `$LOOM_SIZE` | 360 | opening diameter in logical px — drag an edge to change it at runtime |
+| `$LOOM_MARGIN` | 40 | inset from the screen corner |
 | `$LOOM_CAM` | auto | camera device, see below |
 
-Anything else is a window rule, and **later rules win**, so you never need to edit `loom.lua` —
-add your own after the `dofile`:
+Anything else is a window rule, and **later rules win**, so append your own to `hypr/loom.lua`:
 
 ```lua
 o.window("^loom-cam$", { opacity = "0.9 0.9", no_shadow = false })
@@ -73,8 +70,10 @@ covers which rules are load-bearing.
 | | |
 |---|---|
 | `loom` | start — click a window/monitor or drag a region in the picker |
-| `loom` again, or click the top-bar record dot | stop, save to `~/Videos/`, notify (click toast → mpv) |
-| `SUPER ALT P` | pause / unpause (notifies; the bar indicator only knows recording vs not) |
+| `loom` again | stop, save to `~/Videos/`, notify (click toast → mpv) |
+| Click the red top-bar icon | open the recording panel |
+| Panel Pause/Resume or `SUPER ALT P` | pause / unpause; paused time is dropped from the file |
+| Panel Stop | stop and save the recording |
 | `SUPER` + left-drag | move it |
 | `SUPER` + right-drag | resize it, live, while recording — stays a circle |
 | `loom /dev/video2` | pick a different camera, once |
@@ -139,7 +138,8 @@ Paused time is **dropped** from the file, not frozen (gsr 6.0.0, measured: 3s + 
 ## Test
 
 ```bash
-./test/checks.sh
+./test/status-checks.sh # headless recorder-state check
+./test/checks.sh        # live webcam/Hyprland checks
 ```
 
 Asserts the overlay launches with its rules applied, that it reaches the bottom-right corner, and
@@ -173,8 +173,9 @@ enough to make it look like a plain tiled window. Both are worth knowing before 
 
 1. **The rules stopped being loaded.** Quattro moved Hyprland config to Lua and deleted
    `hyprland.conf`, taking the `source = .../loom.conf` line with it. The rules file is now
-   `hypr/loom.lua` (`o.window("^loom-cam$", { ... })`, matching how omarchy writes its own), pulled
-   in by a `dofile`. Nothing errors when this is missing — you just get an unstyled window.
+   `hypr/loom.lua` (`o.window("^loom-cam$", { ... })`, matching how omarchy writes its own),
+   `dofile`d into the live compositor by `loom-cam` via `hyprctl eval`. Nothing errors when this
+   fails — you just get an unstyled window.
 2. **`hyprctl dispatch` now takes Lua.** `movewindowpixel "exact X Y,class:loom-cam"` fails to
    parse, so the overlay stayed wherever the map rule dropped it (mid-screen), and the
    aspect-lock poll stopped squaring the window. The forms that work:
@@ -186,13 +187,11 @@ enough to make it look like a plain tiled window. Both are worth knowing before 
 
    `resize` is exact, not a delta, and resizes about the window's centre.
 
-Two things loom used to own that Quattro now does itself, and which were deleted rather than
-ported: the `loom-status` script (Quattro's `omarchy.indicators` / `ScreenRecording` widget polls
-`gpu-screen-recorder` and stops it on click), and the exit-code workaround —
-`omarchy-capture-screenrecording` no longer ends in `pkill -RTMIN+8 waybar` and now exits 0 on a
-successful start. `bin/loom` still asks `pgrep` rather than trusting the exit code, because a
-cancelled picker and a failed start are both non-zero and only `pgrep` says whether an overlay
-would be orphaned.
+Quattro's recorder no longer needs the old Waybar refresh or exit-code workaround.
+`bin/loom-status` now has one smaller job: compare the live recorder PID with Loom's runtime PID
+marker so the custom bar widget never appears for recordings started outside Loom. `bin/loom`
+still asks `pgrep` rather than trusting the recorder exit code, because a cancelled picker and a
+failed start are both non-zero and only `pgrep` says whether an overlay would be orphaned.
 
 Quattro also gained its own `--with-webcam` overlay (`omarchy-capture-webcam-*`), but it's an 8:9
 rounded rect on the `WebcamOverlay-{small,medium,large}` app-ids. loom keys on `loom-cam`, so the

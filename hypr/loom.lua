@@ -1,23 +1,22 @@
 -- loom — the circular webcam overlay, as Hyprland window rules.
 --
--- Loaded by a `dofile` line install.sh appends to ~/.config/hypr/hyprland.lua. Omarchy Quattro
--- configures Hyprland in Lua and has no hyprland.conf, so there is no `source =` equivalent.
+-- Nothing in ~/.config loads this. loom-cam runs it in the live Hyprland, right before mpv:
 --
--- To customize, set `loom` before the dofile line, in ~/.config/hypr/hyprland.lua:
+--     hyprctl eval "loom = { size = 360, margin = 40 }; dofile([[.../hypr/loom.lua]])"
 --
---     loom = { size = 480, margin = 24 }
---     dofile(os.getenv("HOME") .. "/code/loom-omarchy-linux/hypr/loom.lua")
+-- so loom needs no line in hyprland.lua and an omarchy update has nothing of loom's to overwrite.
+-- Omarchy Quattro configures Hyprland in Lua and has no hyprland.conf, and `hyprctl keyword` is
+-- refused by the new parser, so `eval` is the way in — it runs in the config's own scope, which
+-- is where `o.window` lives.
 --
--- For anything not listed here, add your own `o.window("^loom-cam$", { ... })` call *after* the
--- dofile: later rules win, so you can override any of these without editing this file.
+-- To customize: $LOOM_SIZE / $LOOM_MARGIN for the two below, this file for anything else.
 loom = loom or {}
 
 -- Starting diameter, in Hyprland's logical pixels. Drag an edge to change it at runtime; this is
--- only where it opens.
+-- only where it opens. $LOOM_SIZE.
 local size = loom.size or 360
--- Inset from the screen corner. loom-cam does the real positioning ~100ms after the window maps
--- (see below) and reads this from $LOOM_MARGIN, so change both together or the overlay visibly
--- hops once on launch. Cosmetic if you don't.
+-- Inset from the screen corner, $LOOM_MARGIN. loom-cam passes the same value it uses for the real
+-- positioning ~100ms after the window maps (see below), so the two can't drift apart.
 local margin = loom.margin or 40
 
 -- The circle is NOT drawn by Hyprland — it's baked into the video's alpha channel by loom-cam, so

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "loom.recording",
+  "name": "Loom Recording",
+  "version": "1.0.0",
+  "author": "SomeoneWithOptions",
+  "license": "MIT",
+  "description": "Loom recording controls for the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Loom Recording",
+    "description": "Pause, resume, or stop an active Loom recording.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
