@@ -17,23 +17,26 @@ SIZE=${LOOM_SIZE:-360}
 # readlink: this script normally runs from a ~/.local/bin symlink into the repo.
 REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 
-# Pick order: explicit argument, $LOOM_CAM, first external camera, first camera at all.
-# Plain enumeration order always loses to the laptop: the built-in camera is /dev/video0 and an
-# external one lands on video4+. Prefer a by-id path over /dev/videoN — udev keeps those names
-# stable across reboots and re-plugs, while the numbers shift. -video-index0 is the capture
-# node; -index1 is the metadata node, which has no formats to play.
+# Pick order: explicit argument, $LOOM_CAM, first external camera, then the internal one.
+# A camera can expose several V4L2 nodes: the real RGB capture node, a metadata node with no
+# capture formats, and — on SunplusIT built-ins — an IR node that only does GREY. The by-id
+# "-video-index0" symlink on those points at the IR node, so grabbing by-id shows the IR
+# camera, which looks negative and blinks. Select by capability instead: colour formats only
+# (MJPG/YUYV), external card name preferred, first match wins.
 device="${1:-${LOOM_CAM:-}}"
 if [[ -z $device ]]; then
-  mapfile -t cams < <(ls /dev/v4l/by-id/*-video-index0 2>/dev/null)
-  for c in ${cams[@]+"${cams[@]}"}; do
-    [[ $c =~ [Ii]ntegrated|[Bb]uilt[-_]?[Ii]n ]] || {
-      device=$c
+  for d in /dev/video*; do
+    fmt=$(v4l2-ctl -d "$d" --list-formats 2>/dev/null)
+    [[ $fmt == *MJPG* || $fmt == *YUYV* ]] || continue
+    card=$(v4l2-ctl -d "$d" --info 2>/dev/null | awk -F' *: *' '/Card type/{print $2; exit}')
+    if [[ $card =~ [Ii]ntegrated|[Bb]uilt[-_]?[Ii]n ]]; then
+      internal=${internal:-$d}
+    else
+      device=$d
       break
-    }
+    fi
   done
-  device=${device:-${cams[0]:-}}
-  # by-id only exists once udev has run; fall back to enumeration order if it hasn't.
-  [[ -n $device ]] || device=$(v4l2-ctl --list-devices 2>/dev/null | grep -m1 '^[[:space:]]*/dev/video' | tr -d '\t')
+  device=${device:-${internal:-}}
 fi
 [[ -n $device ]] || {
   notify-send "loom: no webcam found" -u critical
