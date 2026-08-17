@@ -70,6 +70,11 @@ else
   rm "$tmp"
 fi
 
+# rescanPlugins picks up a plugin that wasn't there before, but it does not re-read the QML of one
+# the shell already loaded — re-running this after editing Panel.qml would otherwise leave the old
+# panel on screen while reporting success.
+omarchy-restart-shell
+
 # Upgrade path: earlier versions appended these two lines to ~/.config/hypr. Nothing does now.
 sed -i '/loom: circular webcam overlay/,+1d' ~/.config/hypr/hyprland.lua 2>/dev/null || true
 sed -i '/^-- loom$/,+1d' ~/.config/hypr/bindings.lua 2>/dev/null || true

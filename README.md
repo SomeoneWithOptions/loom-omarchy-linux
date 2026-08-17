@@ -24,6 +24,11 @@ symlinked to the repo, so edits are live. `install.sh` validates and enables the
 with existing system controls when available, and saves the original shell config once as
 `~/.config/omarchy/shell.json.pre-loom`.
 
+The symlink makes an edit to `plugin/Panel.qml` live only after `omarchy-restart-shell`. Neither
+`omarchy-shell shell reloadConfig` nor `rescanPlugins` re-reads a plugin's QML — both answer `ok`
+and keep serving the version loaded at startup, so an edited panel looks like an edit that did
+nothing (verified with inotify: the running shell never opens the file again).
+
 The window rules and the pause keybind are registered in the *running* Hyprland instead, by the
 scripts that need them:
 
@@ -40,7 +45,8 @@ eval."* `eval` runs Lua in the config's own scope, which is where `o.window`, `o
 
 The plugin is a first-class Omarchy `bar-widget`, not a StatusNotifier tray process. It follows
 Omarchy's `Panel` / `BarIconButton` / `KeyboardPanel` pattern used by Wi-Fi and Bluetooth. Its red
-icon exists only while a recording started by `loom` is active; click it for Pause/Resume and Stop.
+icon exists only while a recording started by `loom` is active; click it for the camera and mic in
+use, Pause/Resume and Stop.
 The installer removes Omarchy's generic `ScreenRecording` indicator while preserving any other
 items in `omarchy.indicators`. Other Omarchy recordings therefore have no recording icon.
 
@@ -71,7 +77,7 @@ covers which rules are load-bearing.
 |---|---|
 | `loom` | start — click a window/monitor or drag a region in the picker |
 | `loom` again | stop, save to `~/Videos/`, notify (click toast → mpv) |
-| Click the red top-bar icon | open the recording panel |
+| Click the red top-bar icon | open the recording panel — shows the camera and mic being recorded |
 | Panel Pause/Resume or `SUPER ALT P` | pause / unpause; paused time is dropped from the file |
 | Panel Stop | stop and save the recording |
 | `SUPER` + left-drag | move it |
@@ -142,8 +148,8 @@ Paused time is **dropped** from the file, not frozen (gsr 6.0.0, measured: 3s + 
 ./test/checks.sh        # live webcam/Hyprland checks
 ```
 
-Asserts the overlay launches with its rules applied, that it reaches the bottom-right corner, and
-that the generated mask is round and `alphamerge` turns it into real transparency (alpha 0 at the
+Asserts the overlay launches with its rules applied, that it reaches the bottom-right corner, that
+it wrote a camera name for the panel to show, and that the generated mask is round and `alphamerge` turns it into real transparency (alpha 0 at the
 corners, 255 in the middle). The corner check is separate from the rules check on purpose: the
 Quattro update broke those two paths independently (see [Porting to Quattro](#porting-to-quattro)).
 
@@ -217,9 +223,13 @@ two don't collide — the circle is still the reason this repo exists.
 - Monitor capture includes the Quickshell top bar, and any desktop-frame border you run. Cosmetic
   — disable the frame plugin in `shell.json` first if it bothers you.
 - Mic is whatever `default_input` is (hardcoded in the omarchy script), so there's no per-recording
-  picker. Wrong mic → set the system default once with `pactl set-default-source`. Adding a picker
-  would mean forking that script, which costs the region picker, the bar indicator and the
-  post-process pass along with it — not worth it for a setting you change once.
+  picker — the panel shows *which* mic, which is the part you actually want to catch before you
+  talk for ten minutes. Wrong mic → `pactl set-default-source` (or the audio panel) and restart the
+  recording. Changing it mid-recording does nothing: gsr resolves `default_input` at start and
+  keeps that source, and `pactl move-source-output` on its stream answers `Invalid argument` (both
+  measured on gsr 6.0.0). What does work is relinking gsr's PipeWire node by hand —
+  `pw-link -d <old>:capture_FL gsr-default_input:input_FL` then `pw-link <new>:capture_FL
+  gsr-default_input:input_FL`, per channel — if a live mic switch is ever worth wiring up.
 - The first second or two of camera image can come out dark — that's the sensor's exposure
   warming up, not the overlay. Omarchy's own recorder sleeps before starting gsr for the same
   reason; loom starts the recorder first, so the warmup lands inside the file.

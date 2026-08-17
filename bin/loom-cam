@@ -40,6 +40,12 @@ fi
   exit 1
 }
 
+# Name for the bar panel. uvc repeats the name in "Card type" and v4l2 truncates the copy
+# ("OBSBOT Meet 2: OBSBOT Meet 2 St"), so take the part before the colon; the by-id path is the
+# fallback for a driver that reports no card name.
+card=$(v4l2-ctl -d "$device" --info 2>/dev/null | awk -F' *: *' '/Card type/{print $2; exit}')
+printf '%s\n' "${card:-$(basename "$device")}" >"${XDG_RUNTIME_DIR:-/tmp}/loom-camera"
+
 # One 512px white-circle-on-black frame, generated once. geq is slow per-pixel, which is fine
 # for a single still and would not be for live video.
 [[ -f $MASK ]] || ffmpeg -y -v error -f lavfi -i "color=black:s=512x512" \

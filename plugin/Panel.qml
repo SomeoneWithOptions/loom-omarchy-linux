@@ -12,17 +12,25 @@ Panel {
   property string recordingState: "inactive"
   property int selectedAction: 0
   property bool cursorActive: false
+  property string cameraName: ""
+  property string micName: ""
 
   readonly property bool recordingActive: recordingState !== "inactive"
   readonly property bool paused: recordingState === "paused"
   readonly property string binDir: Quickshell.env("HOME") + "/.local/bin/"
+  readonly property string stateDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/"
 
   visible: recordingActive
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  // The device names are re-read on the same tick as the state rather than watched: the files are
+  // written once per recording and don't exist between them, and watchChanges has nothing to watch
+  // until they appear.
   function refresh() {
     if (!statusProc.running) statusProc.running = true
+    cameraFile.reload()
+    micFile.reload()
   }
 
   function updateState(raw) {
@@ -74,6 +82,22 @@ Panel {
       waitForEnd: true
       onStreamFinished: root.updateState(text)
     }
+  }
+
+  FileView {
+    id: cameraFile
+    path: root.stateDir + "loom-camera"
+    printErrors: false
+    onLoaded: root.cameraName = text().trim()
+    onLoadFailed: root.cameraName = ""
+  }
+
+  FileView {
+    id: micFile
+    path: root.stateDir + "loom-mic"
+    printErrors: false
+    onLoaded: root.micName = text().trim()
+    onLoadFailed: root.micName = ""
   }
 
   BarIconButton {
@@ -161,6 +185,32 @@ Panel {
 
         PanelSeparator {
           foreground: root.bar.foreground
+        }
+
+        Column {
+          width: parent.width
+          spacing: Style.space(6)
+          visible: root.cameraName !== "" || root.micName !== ""
+
+          Text {
+            width: parent.width
+            visible: root.cameraName !== ""
+            text: "󰄀  " + root.cameraName
+            elide: Text.ElideRight
+            color: Qt.darker(root.bar.foreground, 1.2)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            width: parent.width
+            visible: root.micName !== ""
+            text: "󰍬  " + root.micName
+            elide: Text.ElideRight
+            color: Qt.darker(root.bar.foreground, 1.2)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.body
+          }
         }
 
         Row {

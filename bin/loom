@@ -6,6 +6,8 @@ GSR='^gpu-screen-recorder'
 STATE_DIR=${XDG_RUNTIME_DIR:-/tmp}
 ACTIVE=$STATE_DIR/loom-recording.pid
 PAUSED=$STATE_DIR/loom-paused
+MIC=$STATE_DIR/loom-mic       # read by the bar panel; loom-cam writes the camera one
+CAM=$STATE_DIR/loom-camera
 PAUSE_KEY='SUPER + ALT + P'
 BIN=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")") # ~/.local/bin is a symlink into the repo
 
@@ -16,13 +18,13 @@ BIN=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")") # ~/.local/bin is a symlink 
 # restarting the recording); a stale bind is harmless, loom-pause exits 0 with no recorder up.
 if pgrep -f "$GSR" >/dev/null; then
   # No un-pause needed first: gsr 6.0.0 saves a valid file on SIGINT while paused (tested).
-  rm -f "$ACTIVE" "$PAUSED"
+  rm -f "$ACTIVE" "$PAUSED" "$MIC" "$CAM"
   hyprctl eval "hl.unbind([[$PAUSE_KEY]])" >/dev/null
   exec omarchy-capture-screenrecording # stops, saves, kills the cam overlay itself
 fi
 
 # Also clear stale state on start: recordings can be stopped outside Loom's own stop path.
-rm -f "$ACTIVE" "$PAUSED"
+rm -f "$ACTIVE" "$PAUSED" "$MIC" "$CAM"
 
 # Recorder FIRST: it returns once gsr is up, so nothing extra is in the slurp picker.
 # gsr running is the signal, not the exit code: a cancelled picker and a failed start both come
@@ -30,6 +32,12 @@ rm -f "$ACTIVE" "$PAUSED"
 omarchy-capture-screenrecording --with-microphone-audio
 pid=$(pgrep -o -f "$GSR") || exit 1 # picker cancelled -> no orphan overlay
 printf '%s\n' "$pid" >"$ACTIVE"       # lets the bar distinguish Loom from other recordings
+
+# Snapshot the mic for the panel. A snapshot, not a live read: gsr resolves `default_input` once,
+# when it starts, and then keeps that source for the whole recording — changing the system default
+# mid-recording leaves gsr on the old one (measured), so the value at start is the true one.
+pactl -f json list sources 2>/dev/null |
+  jq -r --arg n "$(pactl get-default-source 2>/dev/null)" '.[] | select(.name == $n) | .description' >"$MIC"
 
 hyprctl eval "o.bind([[$PAUSE_KEY]], [[Pause recording]], [[$BIN/loom-pause]])" >/dev/null
 

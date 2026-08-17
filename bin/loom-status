@@ -12,5 +12,8 @@ if [[ -r $active ]]; then
   fi
 fi
 
+# Deliberately does not clear loom-mic / loom-camera: this runs every 500ms from the bar, and the
+# overlay can be up before the recording is (it's also runnable on its own). `loom` clears them
+# when a recording starts, which is the only time they are read.
 rm -f "$active" "$paused"
 echo inactive

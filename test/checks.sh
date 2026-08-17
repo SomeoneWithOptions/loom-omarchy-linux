@@ -66,6 +66,16 @@ if ls /dev/v4l/by-id/*-video-index0 2>/dev/null | grep -qvi integrated; then
 else
   echo "SKIP: no external camera plugged in"
 fi
+# The name the bar panel shows. Asserted non-empty rather than against a fixed string, so any
+# camera passes — the failure this catches is v4l2-ctl's output changing shape and leaving the
+# panel row blank.
+cam_name=$(cat "${XDG_RUNTIME_DIR:-/tmp}/loom-camera" 2>/dev/null || true)
+if [[ -n $cam_name && $cam_name != *:* ]]; then
+  echo "PASS: camera name written for the panel ($cam_name)"
+else
+  echo "FAIL: expected a camera name in \$XDG_RUNTIME_DIR/loom-camera, got '${cam_name:-nothing}'"
+  fail=1
+fi
 pkill -f WebcamOverlay
 
 # --- 3. the mask is a circle, and it becomes alpha -----------------------------------------
