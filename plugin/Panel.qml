@@ -110,7 +110,7 @@ Panel {
     onPressed: function() { root.toggle() }
   }
 
-  KeyboardPanel {
+  FramePanel {
     id: panel
     anchorItem: button
     owner: root
