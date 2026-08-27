@@ -1,7 +1,7 @@
 # loom-omarchy-linux
 
-Loom-style screen recording on Hyprland/Omarchy: **circular webcam overlay, saved locally**.
-No upload, no editor, no accounts.
+Loom-style screen recording on Hyprland/Omarchy: **circular webcam overlay, saved locally**,
+with an assisted upload handoff to Loom. No editor, account storage, or private Loom API.
 
 It's a thin wrapper around `omarchy-capture-screenrecording` (gpu-screen-recorder + slurp picker
 + post-processing). Loom adds a circular mpv webcam overlay, pause support, and a native Omarchy recording-control
@@ -76,7 +76,9 @@ covers which rules are load-bearing.
 | | |
 |---|---|
 | `loom` | start — click a window/monitor or drag a region in the picker |
-| `loom` again | stop, save to `~/Videos/`, notify (click toast → mpv) |
+| `loom` again | stop, process, save to `~/Videos/`, then show a preview toast |
+| Click the toast preview | open the local file in mpv |
+| Click **Upload to Loom** below the preview | open Loom and reveal the selected video for upload |
 | Click the red top-bar icon | open the recording panel — shows the camera and mic being recorded |
 | Panel Pause/Resume or `SUPER ALT P` | pause / unpause; paused time is dropped from the file |
 | Panel Stop | stop and save the recording |
@@ -84,6 +86,11 @@ covers which rules are load-bearing.
 | `SUPER` + right-drag | resize it, live, while recording — stays a circle |
 | `loom /dev/video2` | pick a different camera, once |
 | `LOOM_CAM=... loom` | pick a different camera, every time (export it from your shell profile) |
+
+The upload action stays on Loom's supported web flow: it opens the video library and selects the
+processed file in the file manager. Choose **New Video → Upload Video**, then drag the selected file
+into Loom. Loom has no public upload API, so the tool never stores browser cookies or Loom
+credentials and never uploads a recording without another explicit user action.
 
 ### Which camera it picks
 
@@ -145,6 +152,7 @@ Paused time is **dropped** from the file, not frozen (gsr 6.0.0, measured: 3s + 
 
 ```bash
 ./test/status-checks.sh # headless recorder-state check
+./test/upload-checks.sh # headless Loom handoff check
 ./test/checks.sh        # live webcam/Hyprland checks
 ```
 
