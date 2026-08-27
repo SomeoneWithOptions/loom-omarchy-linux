@@ -1,0 +1,21 @@
+#!/bin/bash
+# Open Loom's library and reveal the processed recording for drag-and-drop upload.
+set -u
+
+[[ $# -eq 1 && -f $1 ]] || {
+  omarchy-notification-send -u critical -t 4000 "Loom upload" "Recording not found: ${1:-missing path}"
+  exit 1
+}
+file=$(realpath -- "$1")
+
+xdg-open "https://www.loom.com/my-videos" >/dev/null 2>&1 &
+
+# FileManager1 works across file managers and, unlike opening the directory, selects the video.
+uri=$(python -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).as_uri())' "$file")
+if ! gdbus call --session \
+  --dest org.freedesktop.FileManager1 \
+  --object-path /org/freedesktop/FileManager1 \
+  --method org.freedesktop.FileManager1.ShowItems \
+  "['$uri']" '' >/dev/null 2>&1; then
+  xdg-open "$(dirname "$file")" >/dev/null 2>&1 &
+fi

@@ -1,0 +1,8 @@
+#!/bin/bash
+# Suppress Omarchy's stock saved toast; Loom replaces it with its two-action preview.
+if [[ ${1:-} == "Screen recording saved" ]]; then
+  touch "${XDG_RUNTIME_DIR:-/tmp}/loom-recording-saved"
+  exit 0
+fi
+
+exec "${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-notification-send" "$@"

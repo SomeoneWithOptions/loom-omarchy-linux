@@ -20,11 +20,34 @@ if pgrep -f "$GSR" >/dev/null; then
   # No un-pause needed first: gsr 6.0.0 saves a valid file on SIGINT while paused (tested).
   rm -f "$ACTIVE" "$PAUSED" "$MIC" "$CAM"
   hyprctl eval "hl.unbind([[$PAUSE_KEY]])" >/dev/null
-  exec omarchy-capture-screenrecording # stops, saves, kills the cam overlay itself
+
+  # Omarchy owns finalization, but its stock toast has one click target. Suppress only that success
+  # toast and replace it after finalization with Loom's preview + upload actions; error toasts pass
+  # through unchanged. The filename file is removed by the recorder, so read it before stopping.
+  filename=$(cat /tmp/omarchy-screenrecord-filename 2>/dev/null || true)
+  saved=$STATE_DIR/loom-recording-saved
+  rm -f "$saved"
+  PATH="$(dirname "$BIN")/libexec:$PATH" omarchy-capture-screenrecording
+  status=$?
+
+  if [[ -f $saved && -f $filename ]]; then
+    preview=$STATE_DIR/loom-preview-$(basename "${filename%.mp4}").png
+    ffmpeg -y -v error -ss 0.1 -i "$filename" -frames:v 1 -q:v 2 "$preview" 2>/dev/null || preview=
+    if ! omarchy-shell loom-toast show "$filename" "$preview" >/dev/null 2>&1; then
+      fallback=("Screen recording saved" "Click to open" -t 10000)
+      [[ -z $preview ]] || fallback+=(--image "$preview")
+      fallback+=(--exec mpv -- "$filename")
+      omarchy-notification-send "${fallback[@]}"
+    fi
+    printf '%s\n' "$filename"
+  fi
+  rm -f "$saved"
+  exit "$status"
 fi
 
 # Also clear stale state on start: recordings can be stopped outside Loom's own stop path.
-rm -f "$ACTIVE" "$PAUSED" "$MIC" "$CAM"
+omarchy-shell -q loom-toast close
+rm -f "$ACTIVE" "$PAUSED" "$MIC" "$CAM" "$STATE_DIR"/loom-preview-*.png
 
 # Recorder FIRST: it returns once gsr is up, so nothing extra is in the slurp picker.
 # gsr running is the signal, not the exit code: a cancelled picker and a failed start both come

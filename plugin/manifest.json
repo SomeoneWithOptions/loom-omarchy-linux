@@ -5,10 +5,12 @@
   "version": "1.0.0",
   "author": "SomeoneWithOptions",
   "license": "MIT",
-  "description": "Loom recording controls for the Omarchy bar.",
-  "kinds": ["bar-widget"],
+  "description": "Loom recording controls and post-recording upload flow.",
+  "kinds": ["bar-widget", "service"],
+  "keepLoaded": true,
   "entryPoints": {
-    "barWidget": "Panel.qml"
+    "barWidget": "Panel.qml",
+    "service": "UploadToast.qml"
   },
   "barWidget": {
     "displayName": "Loom Recording",
