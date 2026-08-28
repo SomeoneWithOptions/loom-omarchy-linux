@@ -7,7 +7,10 @@ STATE_DIR=${XDG_RUNTIME_DIR:-/tmp}
 ACTIVE=$STATE_DIR/loom-recording.pid
 PAUSED=$STATE_DIR/loom-paused
 MIC=$STATE_DIR/loom-mic       # read by the bar panel; loom-cam writes the camera one
+MIC_SOURCE=$STATE_DIR/loom-mic-source # pulse name of that mic, for the panel's live mute/level
 CAM=$STATE_DIR/loom-camera
+STARTED=$STATE_DIR/loom-started       # monotonic start, for the panel's timer
+PAUSED_TOTAL=$STATE_DIR/loom-paused-total
 PAUSE_KEY='SUPER + ALT + P'
 BIN=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")") # ~/.local/bin is a symlink into the repo
 
@@ -18,7 +21,7 @@ BIN=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")") # ~/.local/bin is a symlink 
 # restarting the recording); a stale bind is harmless, loom-pause exits 0 with no recorder up.
 if pgrep -f "$GSR" >/dev/null; then
   # No un-pause needed first: gsr 6.0.0 saves a valid file on SIGINT while paused (tested).
-  rm -f "$ACTIVE" "$PAUSED" "$MIC" "$CAM"
+  rm -f "$ACTIVE" "$PAUSED" "$PAUSED_TOTAL" "$STARTED" "$MIC" "$MIC_SOURCE" "$CAM"
   hyprctl eval "hl.unbind([[$PAUSE_KEY]])" >/dev/null
 
   # Omarchy owns finalization, but its stock toast has one click target. Suppress only that success
@@ -47,7 +50,8 @@ fi
 
 # Also clear stale state on start: recordings can be stopped outside Loom's own stop path.
 omarchy-shell -q loom-toast close
-rm -f "$ACTIVE" "$PAUSED" "$MIC" "$CAM" "$STATE_DIR"/loom-preview-*.png
+rm -f "$ACTIVE" "$PAUSED" "$PAUSED_TOTAL" "$STARTED" "$MIC" "$MIC_SOURCE" "$CAM" \
+  "$STATE_DIR"/loom-preview-*.png
 
 # Recorder FIRST: it returns once gsr is up, so nothing extra is in the slurp picker.
 # gsr running is the signal, not the exit code: a cancelled picker and a failed start both come
@@ -56,11 +60,29 @@ omarchy-capture-screenrecording --with-microphone-audio
 pid=$(pgrep -o -f "$GSR") || exit 1 # picker cancelled -> no orphan overlay
 printf '%s\n' "$pid" >"$ACTIVE"       # lets the bar distinguish Loom from other recordings
 
+# Timer baseline, published after the PID so a loom-status poll landing in between can't sweep it
+# away as stale state. Monotonic, so an NTP step doesn't jump the panel's clock.
+read -r uptime_now _ </proc/uptime
+printf '%s\n' "${uptime_now%.*}" >"$STARTED"
+printf '0\n' >"$PAUSED_TOTAL"
+
 # Snapshot the mic for the panel. A snapshot, not a live read: gsr resolves `default_input` once,
 # when it starts, and then keeps that source for the whole recording — changing the system default
 # mid-recording leaves gsr on the old one (measured), so the value at start is the true one.
-pactl -f json list sources 2>/dev/null |
-  jq -r --arg n "$(pactl get-default-source 2>/dev/null)" '.[] | select(.name == $n) | .description' >"$MIC"
+# Both the pulse name and the description are kept: the panel shows the description and polls the
+# name, which is the only handle that still points at gsr's source if the default moves.
+source_name=$(pactl get-default-source 2>/dev/null)
+[[ -z $source_name ]] || printf '%s\n' "$source_name" >"$MIC_SOURCE"
+read -r muted description < <(pactl -f json list sources 2>/dev/null |
+  jq -r --arg n "$source_name" '.[] | select(.name == $n) | "\(.mute) \(.description)"') || true
+printf '%s\n' "${description:-}" >"$MIC"
+
+# The one mistake that costs a whole take. The panel shows it for as long as it lasts; this fires
+# once, now, while the recording is still a few seconds long.
+if [[ ${muted:-} == true ]]; then
+  omarchy-notification-send -u critical -t 8000 "Loom: microphone is muted" \
+    "${description:-Default input} is muted — this recording will have no voice."
+fi
 
 hyprctl eval "o.bind([[$PAUSE_KEY]], [[Pause recording]], [[$BIN/loom-pause]])" >/dev/null
 

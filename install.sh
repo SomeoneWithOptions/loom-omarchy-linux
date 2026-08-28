@@ -6,7 +6,7 @@ set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
 
-for cmd in hyprctl mpv ffmpeg jq v4l2-ctl python gdbus xdg-open omarchy omarchy-shell; do
+for cmd in hyprctl mpv ffmpeg jq v4l2-ctl pactl python gdbus xdg-open omarchy omarchy-shell; do
   command -v "$cmd" >/dev/null ||
     { echo "missing dependency: $cmd — install it (mpv: sudo pacman -S --needed mpv)" >&2; exit 1; }
 done
