@@ -1,19 +1,62 @@
 #!/bin/bash
-# Reports state only for recorder PID started by loom.
+# Reports state only for the recorder PID started by loom, plus the two things the bar panel
+# renders live: elapsed recording time and whether the mic being recorded is muted.
+#
+# One line, three fields: "<recording|paused|inactive> <elapsed-seconds> <live|muted|unknown>".
+# The panel polls this every 500ms, so it answers everything in one process rather than three.
 state_dir=${XDG_RUNTIME_DIR:-/tmp}
 active=$state_dir/loom-recording.pid
 paused=$state_dir/loom-paused
+paused_total=$state_dir/loom-paused-total
+started=$state_dir/loom-started
+mic_source=$state_dir/loom-mic-source
+
+read -r now _ </proc/uptime
+now=${now%.*}
+
+read_int() { # file, fallback
+  local v
+  read -r v 2>/dev/null <"$1"
+  if [[ ${v:-} =~ ^[0-9]+$ ]]; then printf '%s' "$v"; else printf '%s' "$2"; fi
+}
+
+# Elapsed tracks the saved file, not the wall clock: gsr drops paused time, so paused spans come
+# off too — the finished ones banked in loom-paused-total, the open one from loom-paused.
+elapsed() {
+  local begin total since e
+  begin=$(read_int "$started" "$now")
+  total=$(read_int "$paused_total" 0)
+  e=$((now - begin - total))
+  if [[ -f $paused ]]; then
+    since=$(read_int "$paused" "$now")
+    e=$((e - (now - since)))
+  fi
+  if ((e > 0)); then printf '%s' "$e"; else printf '%s' 0; fi
+}
+
+# The source gsr actually captures, snapshotted by `loom` at start — deliberately not
+# @DEFAULT_SOURCE@, which follows the system default and would report on the wrong device once
+# that changes mid-recording (gsr resolves default_input once and keeps it).
+mic_state() {
+  local name out
+  read -r name 2>/dev/null <"$mic_source"
+  [[ -n ${name:-} ]] || { printf unknown; return; }
+  out=$(pactl get-source-mute "$name" 2>/dev/null) || { printf unknown; return; }
+  if [[ $out == *yes* ]]; then printf muted; else printf live; fi
+}
 
 if [[ -r $active ]]; then
   read -r pid <"$active"
   if [[ $pid =~ ^[0-9]+$ ]] && pgrep -f '^gpu-screen-recorder' | grep -qx "$pid"; then
-    [[ -f $paused ]] && echo paused || echo recording
+    [[ -f $paused ]] && state=paused || state=recording
+    printf '%s %s %s\n' "$state" "$(elapsed)" "$(mic_state)"
     exit 0
   fi
 fi
 
-# Deliberately does not clear loom-mic / loom-camera: this runs every 500ms from the bar, and the
-# overlay can be up before the recording is (it's also runnable on its own). `loom` clears them
-# when a recording starts, which is the only time they are read.
-rm -f "$active" "$paused"
-echo inactive
+# Deliberately does not clear loom-mic / loom-camera / loom-mic-source: this runs every 500ms from
+# the bar, and the overlay can be up before the recording is (it's also runnable on its own).
+# `loom` clears them when a recording starts, which is the only time they are read. The timing
+# files are safe to drop here — `loom` rewrites them after it has published the recorder PID.
+rm -f "$active" "$paused" "$paused_total" "$started"
+echo "inactive 0 unknown"

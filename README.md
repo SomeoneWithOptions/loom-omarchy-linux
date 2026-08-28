@@ -4,12 +4,12 @@ Loom-style screen recording on Hyprland/Omarchy: **circular webcam overlay, save
 with an assisted upload handoff to Loom. No editor, account storage, or private Loom API.
 
 It's a thin wrapper around `omarchy-capture-screenrecording` (gpu-screen-recorder + slurp picker
-+ post-processing). Loom adds a circular mpv webcam overlay, pause support, and a native Omarchy recording-control
-panel.
++ post-processing). Loom adds a circular mpv webcam overlay, pause support, and a native Omarchy
+recording-control panel with an elapsed timer and a live mic meter.
 
 ## Install
 
-Requires **Omarchy Quattro** (Hyprland configured in Lua) plus `mpv`, `ffmpeg`, `jq` and
+Requires **Omarchy Quattro** (Hyprland configured in Lua) plus `mpv`, `ffmpeg`, `jq`, `pactl` and
 `v4l2-ctl` — all but `mpv` are already on a stock Omarchy box. Earlier Omarchy releases used
 `hyprland.conf` and won't work unchanged; see [Porting to Quattro](#porting-to-quattro).
 
@@ -45,8 +45,8 @@ eval."* `eval` runs Lua in the config's own scope, which is where `o.window`, `o
 
 The plugin is a first-class Omarchy `bar-widget`, not a StatusNotifier tray process. It follows
 Omarchy's `Panel` / `BarIconButton` / `KeyboardPanel` pattern used by Wi-Fi and Bluetooth. Its red
-icon exists only while a recording started by `loom` is active; click it for the camera and mic in
-use, Pause/Resume and Stop.
+icon exists only while a recording started by `loom` is active; click it for the elapsed time, the
+camera and mic in use with a live level meter, Pause/Resume and Stop.
 The installer removes Omarchy's generic `ScreenRecording` indicator while preserving any other
 items in `omarchy.indicators`. Other Omarchy recordings therefore have no recording icon.
 
@@ -79,7 +79,8 @@ covers which rules are load-bearing.
 | `loom` again | stop, process, save to `~/Videos/`, then show a preview toast |
 | Click the toast preview | open the local file in mpv |
 | Click **Upload to Loom** below the preview | open Loom and reveal the selected video for upload |
-| Click the red top-bar icon | open the recording panel — shows the camera and mic being recorded |
+| Click the red top-bar icon | open the recording panel — elapsed time, camera, mic and mic level |
+| Bar icon turns into a crossed-out mic | the mic being recorded is muted; the panel says so too |
 | Panel Pause/Resume or `SUPER ALT P` | pause / unpause; paused time is dropped from the file |
 | Panel Stop | stop and save the recording |
 | `SUPER` + left-drag | move it |
@@ -91,6 +92,47 @@ The upload action stays on Loom's supported web flow: it opens the video library
 processed file in the file manager. Choose **New Video → Upload Video**, then drag the selected file
 into Loom. Loom has no public upload API, so the tool never stores browser cookies or Loom
 credentials and never uploads a recording without another explicit user action.
+
+### Elapsed time, and the mic actually being heard
+
+The panel answers the two questions you have thirty seconds into a take, and it answers both from
+one `loom-status` call per 500ms tick — one line, three fields:
+
+```
+$ loom-status
+recording 187 live      # <recording|paused|inactive> <elapsed-seconds> <live|muted|unknown>
+```
+
+**The timer counts the recording, not the wall clock.** gsr *drops* paused time from the file
+rather than freezing it, so the panel drops it too: `loom` writes a start stamp, `loom-pause`
+stamps each pause and banks the finished span into `loom-paused-total`, and `loom-status`
+subtracts both. What you read on the panel is the length of the mp4 you are about to get.
+
+The stamps are read from `/proc/uptime`, not `date +%s`. They live in `$XDG_RUNTIME_DIR`, which is
+cleared on reboot, so a boot-relative clock can't go stale — and an NTP step or a DST change can't
+jump the timer.
+
+**A muted mic is announced three times, because it's the one fault that costs the whole take.** A
+critical toast fires at start, the bar icon becomes `󰍭` for as long as it lasts, and the open panel
+shows `MUTED` plus a warning strip. Pause still wins the bar icon: a paused recording isn't losing
+anything.
+
+The mute is polled on the **pulse source name snapshotted at start**, not `@DEFAULT_SOURCE@`. gsr
+resolves `default_input` once and keeps it, so once the system default moves mid-recording
+`@DEFAULT_SOURCE@` is answering about a device that isn't in the file.
+
+**The level meter runs only while the panel is open.** Unmuted is not the same as audible — wrong
+device, dead cable, gain at zero — and the meter is the part that proves it hears you. It's
+`bin/loom-mic-level`: ffmpeg on the pulse source, `astats` peak over 100ms windows, one line per
+window, mapped onto a bar over the top 60 dBFS. Leaving it running for the whole recording would
+hold a second capture open on the same source with nobody watching it, so it starts and stops with
+the panel.
+
+The level is read off ffmpeg's **log** stream (`2>&1 >/dev/null`) rather than written with
+`ametadata=print:file=-`. The `file=` path goes through an avio write buffer that only flushes
+every few KB — at ~60 bytes per line that is a meter which updates once every seven seconds and
+loses its tail when killed. The script `exec`s ffmpeg for the same reason in reverse: the panel's
+kill has to land on ffmpeg itself, or it orphans a live audio capture.
 
 ### Which camera it picks
 
@@ -151,14 +193,17 @@ Paused time is **dropped** from the file, not frozen (gsr 6.0.0, measured: 3s + 
 ## Test
 
 ```bash
-./test/status-checks.sh # headless recorder-state check
+./test/status-checks.sh # headless recorder-state, timer and mic-mute checks
 ./test/upload-checks.sh # headless Loom handoff check
 ./test/checks.sh        # live webcam/Hyprland checks
 ```
 
 Asserts the overlay launches with its rules applied, that it reaches the bottom-right corner, that
-it wrote a camera name for the panel to show, and that the generated mask is round and `alphamerge` turns it into real transparency (alpha 0 at the
-corners, 255 in the middle). The corner check is separate from the rules check on purpose: the
+it wrote a camera name for the panel to show, and that the generated mask is round and `alphamerge`
+turns it into real transparency (alpha 0 at the corners, 255 in the middle). `status-checks.sh`
+additionally covers the panel's timer arithmetic — elapsed time, the paused span `loom-pause` banks
+on resume, and the clamp that keeps a stale start stamp from producing a negative clock — plus the
+mute read, with `pactl` stubbed so the suite passes on a box with no audio server. The corner check is separate from the rules check on purpose: the
 Quattro update broke those two paths independently (see [Porting to Quattro](#porting-to-quattro)).
 
 It does not assert that Hyprland composites that transparency into the recorded file. That was
@@ -202,8 +247,9 @@ enough to make it look like a plain tiled window. Both are worth knowing before 
    `resize` is exact, not a delta, and resizes about the window's centre.
 
 Quattro's recorder no longer needs the old Waybar refresh or exit-code workaround.
-`bin/loom-status` now has one smaller job: compare the live recorder PID with Loom's runtime PID
-marker so the custom bar widget never appears for recordings started outside Loom. `bin/loom`
+`bin/loom-status` compares the live recorder PID with Loom's runtime PID marker so the custom bar
+widget never appears for recordings started outside Loom, and answers the panel's elapsed time and
+mic mute in the same line, so one process per tick covers all three. `bin/loom`
 still asks `pgrep` rather than trusting the recorder exit code, because a cancelled picker and a
 failed start are both non-zero and only `pgrep` says whether an overlay would be orphaned.
 
@@ -231,8 +277,8 @@ two don't collide — the circle is still the reason this repo exists.
 - Monitor capture includes the Quickshell top bar, and any desktop-frame border you run. Cosmetic
   — disable the frame plugin in `shell.json` first if it bothers you.
 - Mic is whatever `default_input` is (hardcoded in the omarchy script), so there's no per-recording
-  picker — the panel shows *which* mic, which is the part you actually want to catch before you
-  talk for ten minutes. Wrong mic → `pactl set-default-source` (or the audio panel) and restart the
+  picker — the panel shows *which* mic, whether it's muted and whether it's hearing anything, which
+  is the part you actually want to catch before you talk for ten minutes. Wrong mic → `pactl set-default-source` (or the audio panel) and restart the
   recording. Changing it mid-recording does nothing: gsr resolves `default_input` at start and
   keeps that source, and `pactl move-source-output` on its stream answers `Invalid argument` (both
   measured on gsr 6.0.0). What does work is relinking gsr's PipeWire node by hand —

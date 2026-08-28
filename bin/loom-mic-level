@@ -1,0 +1,25 @@
+#!/bin/bash
+# loom-mic-level — stream the recorded mic's peak level for the bar panel's meter.
+#
+# Prints one ffmpeg log line per 100ms, each ending in `Peak_level=<dBFS>` (or `-inf` on silence);
+# the panel maps that to a bar. Started when the panel opens and killed when it closes, so nothing
+# holds a second capture stream open for the whole recording.
+#
+# ffmpeg rather than parec+arithmetic: it's already a hard dependency, and astats does the peak.
+# The level goes out on *stdout* via the log stream (`2>&1 >/dev/null`) on purpose — writing it
+# with `ametadata=print:file=-` instead sends it through an avio buffer that only flushes every
+# few KB, i.e. a meter that updates once every seven seconds and loses its tail when killed.
+# `exec`, so the panel's kill lands on ffmpeg itself and can't orphan a live audio capture.
+set -u
+
+state_dir=${XDG_RUNTIME_DIR:-/tmp}
+source=${1:-}
+[[ -n $source ]] || read -r source 2>/dev/null <"$state_dir/loom-mic-source" || source=
+[[ -n ${source:-} ]] || exit 1
+
+# 16kHz is plenty for a peak meter and a third of the samples of the 48k default. asetnsamples
+# slices the stream into 100ms windows; astats reset=1 makes each window its own measurement
+# rather than a running total, so the meter falls as well as rises.
+exec ffmpeg -hide_banner -nostats -v info -f pulse -ar 16000 -i "$source" \
+  -af "asetnsamples=n=1600:p=0,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.Peak_level" \
+  -f null - 2>&1 >/dev/null

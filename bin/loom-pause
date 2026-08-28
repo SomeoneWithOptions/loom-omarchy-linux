@@ -3,15 +3,28 @@
 state_dir=${XDG_RUNTIME_DIR:-/tmp}
 active=$state_dir/loom-recording.pid
 paused=$state_dir/loom-paused
+paused_total=$state_dir/loom-paused-total
+
+# Monotonic seconds, not `date +%s`: an NTP step or a DST change would otherwise jump the panel's
+# timer. The boot-relative baseline can't go stale, because these files live in the runtime dir.
+read -r now _ </proc/uptime
+now=${now%.*}
 
 [[ -r $active ]] || exit 0
 read -r pid <"$active"
 [[ $pid =~ ^[0-9]+$ ]] && pgrep -f '^gpu-screen-recorder' | grep -qx "$pid" || exit 0
 kill -SIGUSR2 "$pid"
 if [[ -f $paused ]]; then
+  # gsr drops paused time from the file, so the panel's timer has to drop it too. loom-paused
+  # holds the moment this pause began; on resume that span is banked into loom-paused-total.
+  read -r since 2>/dev/null <"$paused" || since=
+  read -r total 2>/dev/null <"$paused_total" || total=
+  [[ ${since:-} =~ ^[0-9]+$ ]] || since=$now
+  [[ ${total:-} =~ ^[0-9]+$ ]] || total=0
+  printf '%s\n' "$((total + now - since))" >"$paused_total"
   rm -f "$paused"
   omarchy-notification-send -t 2000 "Recording resumed"
 else
-  touch "$paused"
+  printf '%s\n' "$now" >"$paused"
   omarchy-notification-send -t 2000 "Recording paused" "Super + Alt + P to resume"
 fi
