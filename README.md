@@ -1,5 +1,26 @@
 # loom-omarchy-linux
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SomeoneWithOptions/loom-omarchy-linux/main/install.sh | bash
+```
+
+Requires **Omarchy Quattro** (Hyprland configured in Lua). Installer downloads Loom into
+`~/.local/share/loom-omarchy-linux` and installs `mpv` through `omarchy pkg add` when missing.
+Earlier Omarchy releases used `hyprland.conf` and won't work unchanged; see
+[Porting to Quattro](#porting-to-quattro).
+
+## Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SomeoneWithOptions/loom-omarchy-linux/main/uninstall.sh | bash
+```
+
+Uninstaller removes only Loom-owned command links, desktop entry, plugin, bar entry, runtime state,
+and downloaded program files. It preserves recordings, unrelated config, user bar changes, cloned
+source repositories, and shared runtime packages.
+
 Loom-style screen recording on Hyprland/Omarchy: **circular webcam overlay, saved locally**,
 with an assisted upload handoff to Loom. No editor, account storage, or private Loom API.
 
@@ -7,22 +28,13 @@ It's a thin wrapper around `omarchy-capture-screenrecording` (gpu-screen-recorde
 + post-processing). Loom adds a circular mpv webcam overlay, pause support, and a native Omarchy
 recording-control panel with an elapsed timer and a live mic meter.
 
-## Install
+Installer symlinks `bin/*` into `~/.local/bin`, writes a launcher entry, and links the native
+Omarchy bar plugin into `~/.config/omarchy/plugins/loom.recording`. It validates and enables the
+plugin, places it with existing system controls when available, and records only data needed for a
+surgical uninstall in `~/.local/state/loom-omarchy-linux/install.json`.
 
-Requires **Omarchy Quattro** (Hyprland configured in Lua) plus `mpv`, `ffmpeg`, `jq`, `pactl` and
-`v4l2-ctl` — all but `mpv` are already on a stock Omarchy box. Earlier Omarchy releases used
-`hyprland.conf` and won't work unchanged; see [Porting to Quattro](#porting-to-quattro).
-
-```bash
-git clone https://github.com/SomeoneWithOptions/loom-omarchy-linux ~/code/loom-omarchy-linux
-~/code/loom-omarchy-linux/install.sh
-```
-
-Symlinks `bin/*` into `~/.local/bin`, writes a launcher entry, and installs the native Omarchy
-bar plugin from `plugin/` into `~/.config/omarchy/plugins/loom.recording`. Scripts and plugin remain
-symlinked to the repo, so edits are live. `install.sh` validates and enables the plugin, places it
-with existing system controls when available, and saves the original shell config once as
-`~/.config/omarchy/shell.json.pre-loom`.
+For development, clone the repository and run `./install.sh`; commands and plugin then link to the
+checkout, so edits remain live. Uninstall never deletes that checkout.
 
 The symlink makes an edit to `plugin/Panel.qml` live only after `omarchy-restart-shell`. Neither
 `omarchy-shell shell reloadConfig` nor `rescanPlugins` re-reads a plugin's QML — both answer `ok`
