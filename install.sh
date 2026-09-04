@@ -3,6 +3,9 @@
 # Local checkout: links files from checkout. curl | bash: downloads into ~/.local/share first.
 set -euo pipefail
 
+# Package-heavy bootstraps can make Quickshell exceed Omarchy's 2s IPC default.
+export OMARCHY_SHELL_IPC_TIMEOUT=${OMARCHY_SHELL_IPC_TIMEOUT:-10s}
+
 REPO_URL=${LOOM_REPO_URL:-https://github.com/SomeoneWithOptions/loom-omarchy-linux}
 REF=${LOOM_REF:-main}
 INSTALL_DIR=$HOME/.local/share/loom-omarchy-linux
