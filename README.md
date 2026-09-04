@@ -6,9 +6,10 @@
 curl -fsSL https://raw.githubusercontent.com/SomeoneWithOptions/loom-omarchy-linux/main/install.sh | bash
 ```
 
-Requires **Omarchy Quattro** (Hyprland configured in Lua). Installer downloads Loom into
-`~/.local/share/loom-omarchy-linux` and installs `mpv` through `omarchy pkg add` when missing.
-Earlier Omarchy releases used `hyprland.conf` and won't work unchanged; see
+Requires **Omarchy Quattro** (Hyprland configured in Lua). Installer is unattended and
+idempotent: it reads no input, downloads Loom into `~/.local/share/loom-omarchy-linux`, and
+installs `mpv` through `omarchy pkg add` when missing. Earlier Omarchy releases used
+`hyprland.conf` and won't work unchanged; see
 [Porting to Quattro](#porting-to-quattro).
 
 ## Uninstall
