@@ -213,6 +213,19 @@ else
   rm "$tmp"
 fi
 
+# Rich recording cards are an overlay on the framed andres.notifications clone shipped
+# by ~/code/config. Missing clone or unknown hashes skip (fallback toast still works).
+overlay_status=0
+overlay_result=
+overlay_result=$("$repo/libexec/loom-notifications-overlay" apply --no-restart) || overlay_status=$?
+if (( overlay_status == 0 )); then
+  echo "Notification overlay: $overlay_result"
+elif (( overlay_status == 2 )); then
+  echo "loom install: notification clone is not the known framed baseline; rich recording cards skipped (standard toast still works)" >&2
+else
+  echo "loom install: notification overlay helper failed; rich recording cards skipped" >&2
+fi
+
 # QML is loaded at shell startup; config reload/rescan alone does not re-read plugin source.
 omarchy-restart-shell
 

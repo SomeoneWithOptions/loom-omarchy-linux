@@ -7,8 +7,9 @@ curl -fsSL https://raw.githubusercontent.com/SomeoneWithOptions/loom-omarchy-lin
 ```
 
 Requires **Omarchy Quattro** (Hyprland configured in Lua). Installer is unattended and
-idempotent: it reads no input, downloads Loom into `~/.local/share/loom-omarchy-linux`, and
-installs `mpv` through `omarchy pkg add` when missing. Earlier Omarchy releases used
+idempotent: it reads no input, downloads Loom into `~/.local/share/loom-omarchy-linux`,
+installs `mpv` through `omarchy pkg add` when missing, and overlays the rich recording card
+onto the framed `andres.notifications` clone when that clone matches the frozen baseline. Earlier Omarchy releases used
 `hyprland.conf` and won't work unchanged; see
 [Porting to Quattro](#porting-to-quattro).
 
@@ -19,8 +20,9 @@ curl -fsSL https://raw.githubusercontent.com/SomeoneWithOptions/loom-omarchy-lin
 ```
 
 Uninstaller removes only Loom-owned command links, desktop entry, plugin, bar entry, runtime state,
-and downloaded program files. It preserves recordings, unrelated config, user bar changes, cloned
-source repositories, and shared runtime packages.
+and downloaded program files. If the framed notifications clone still matches the overlay hashes, it
+restores the config baseline (plain cards). It preserves recordings, unrelated config, user bar
+changes, cloned source repositories, shared runtime packages, and unknown notification clones.
 
 Loom-style screen recording on Hyprland/Omarchy: **circular webcam overlay, saved locally**,
 with an assisted upload handoff to Loom. No editor, account storage, or private Loom API.
@@ -74,7 +76,7 @@ the rough placement and the exact one can't drift apart:
 | `$LOOM_MARGIN` | 40 | inset from the screen corner |
 | `$LOOM_CAM` | auto | camera device, see below |
 
-The saved-recording toast picks a random pastel for the **Upload to Loom** accent each time it opens. Palette lives in `plugin/toast-accents.lua` (same hex list as flicko-picker's `color` file). Add or remove `#rrggbb` lines; comments ignored. Empty file falls back to the theme urgent color. FileView reloads on save, so the next toast uses the new list without a shell restart.
+The recording card picks a random pastel for the **Upload to Loom** accent each time it opens. Palette lives in `plugin/toast-accents.lua` (same hex list as flicko-picker's `color` file). Add or remove `#rrggbb` lines; comments ignored. Empty file falls back to the theme urgent color. FileView reloads on save, so the next card uses the new list without a shell restart.
 
 Anything else is a window rule, and **later rules win**, so append your own to `hypr/loom.lua`:
 
@@ -114,7 +116,7 @@ credentials and never uploads a recording without another explicit user action.
 
 Loom recordings integrate directly into Omarchy's native notification stack instead of spawning a separate, competing overlay window. When a recording finishes, `bin/loom` triggers `bin/loom-notify`, which dispatches a typed D-Bus notification containing private `x-loom-recording` metadata hints.
 
-> **Note**: Rich notification renderer integration is strictly opt-in and maintained outside the normal `loom` installer. On unpatched systems, `bin/loom-notify` works out-of-the-box by sending standard fallback notifications.
+> **Note**: The rich recording card is an overlay on the framed `andres.notifications` clone shipped by the laptop config repo (`~/code/config`). `install.sh` applies it automatically when that clone matches the frozen baseline hashes. Unknown clones and stock Omarchy notifications are left alone; `bin/loom-notify` still sends a standard fallback toast.
 
 - **Stack Geometry & Coexistence**: The card renders within the native top-right notification column with standard width 360px (`Style.space(360)`), a 112px tall video thumbnail (`Style.space(112)`), and an overall card height of ~204–206px adhering to the user's 1px borders and theme radius. Multiple recordings can coexist simultaneously in chronological (newest-first) order alongside ordinary system notifications.
 - **Persistence & Expiry**: With the rich renderer installed, Loom cards are persistent (`popupDuration` returns 0; no auto-dismissal countdown timer), remaining visible until explicitly played, uploaded, or dismissed. For standard system notifications, low and normal urgency notifications auto-expire (5–30s based on urgency), while critical urgency notifications remain persistent.
@@ -131,39 +133,19 @@ Loom recordings integrate directly into Omarchy's native notification stack inst
 - **Preview Staging & Cleanup**: Video thumbnails are staged in `${XDG_STATE_HOME:-$HOME/.local/state}/loom/previews`. Files older than 7 days are cleaned up conservatively only when not referenced by any live or history notifications. If metadata sidecars or state directories are missing or unreadable, cleanup fails closed and preserves all files.
 - **Fallback UI on Unpatched Systems**: On systems without the opt-in custom notification renderer, `bin/loom-notify` sends a standard desktop notification with the preview image and `expire_timeout: 0`. On a stock unpatched Omarchy shell, normal-urgency notifications auto-expire despite a 0 timeout. Other notification daemons decide their own expiry policy for `expire_timeout: 0` normal notifications (some keep it persistent, others force an auto-expiry timer). On supported Omarchy notification servers, the default action plays the video via `--exec` (note: not all notification daemons support `--exec`; where unsupported, the notification functions as an informational toast). Fallback notifications lack the rich Upload button.
 
-#### Custom Plugin Maintenance & Patch Upkeep
+#### Overlay on the framed notifications clone
 
-The rich notification renderer lives outside this repository in your user-cloned Omarchy plugin (`~/.config/omarchy/plugins/<user>.notifications/`). The repository provides `plugin/RecordingNotificationCard.qml` and `integration/notifications.patch` for upkeep.
+Laptop bootstrap order is: config copies the framed `andres.notifications` clone, then Loom applies `libexec/loom-notifications-overlay`. Config replay uses `rsync --delete`, so `4 ConfigFiles.sh` copies the clone again and reapplies the overlay. `--check` compares live files against that expected tree, so the overlay is not reported as drift.
 
-> **IMPORTANT**:
-> - `integration/notifications.patch` targets the original frame-styled clone baseline used in this setup (`andres.notifications`), **NOT** any freshly cloned stock Omarchy service or arbitrary fork.
-> - Always run a dry run first (`patch --dry-run -p1`). The patch must cleanly apply; if your clone differs, manually port the changes (`NotificationLogic.js`, `Service.qml`, `components/NotificationCard.qml`).
-> - If your clone is already patched, **do NOT apply the patch again blindly** on updates, as reapplying will fail or cause corruption.
-> - Never edit stock files in `/usr/share/omarchy/`.
+The helper only writes when the clone hashes match `integration/overlay/base` (config baseline) or the overlay itself. Anything else is refused. It never edits `/usr/share/omarchy/`.
 
-To integrate or inspect your clone:
-1. **Back up your clone outside plugins root** (never place backups inside `~/.config/omarchy/plugins/` where Omarchy scans for plugins, and avoid fixed `.bak` names that create nested copies on repeat):
-   ```bash
-   BACKUP_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/loom/notification-backups/$(date +%Y%m%d_%H%M%S)"
-   mkdir -p "$BACKUP_DIR"
-   cp -r ~/.config/omarchy/plugins/$(whoami).notifications "$BACKUP_DIR/"
-   ```
-2. **Dry-run the patch against your clone**:
-   ```bash
-   cd ~/.config/omarchy/plugins/$(whoami).notifications && patch --dry-run -p1 < /path/to/loom-omarchy-linux/integration/notifications.patch
-   ```
-3. **Apply cleanly (initial installation only)**:
-   ```bash
-   patch -p1 < /path/to/loom-omarchy-linux/integration/notifications.patch
-   ```
-4. **Copy the canonical component**:
-   ```bash
-   cp /path/to/loom-omarchy-linux/plugin/RecordingNotificationCard.qml components/
-   ```
-5. **Validate and restart**:
-   ```bash
-   omarchy plugin validate . && omarchy restart shell
-   ```
+```bash
+libexec/loom-notifications-overlay apply     # install / config replay
+libexec/loom-notifications-overlay restore   # uninstall
+libexec/loom-notifications-overlay status
+```
+
+`integration/notifications.patch` remains a reviewable diff of the same overlay. Do not apply it by hand on a clone the helper already owns.
 
 ### Elapsed time, and the mic actually being heard
 

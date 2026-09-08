@@ -1,0 +1,260 @@
+#!/bin/bash
+# Apply or restore the Loom rich-card overlay onto the framed
+# andres.notifications clone. Never edits /usr/share/omarchy.
+#
+# The overlay is a known-hash transform of the laptop config baseline
+# (integration/overlay/base). Unknown clones are refused so a newer
+# Omarchy/config notification rewrite cannot be half-patched.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: loom-notifications-overlay <command> [options]
+
+Commands:
+  apply     Copy rich-card overlay onto a matching baseline clone
+  restore   Restore baseline files if the overlay is present
+  status    Print missing | baseline | overlay | unknown
+
+Options:
+  --target DIR     Notification plugin clone
+                   (default: ~/.config/omarchy/plugins/andres.notifications)
+  --no-restart     Do not restart Omarchy shell after a file change
+  --no-validate    Skip omarchy plugin validate
+  --dry-run        Report action without writing files
+  -h, --help       Show this help
+
+Stdout is one of: updated | unchanged | skipped | restored
+Unknown clones exit 2. Usage/IO errors exit 1. Missing clone is skipped (0).
+USAGE
+}
+
+SELF=$(readlink -f "${BASH_SOURCE[0]}")
+REPO=$(cd "$(dirname "$SELF")/.." && pwd)
+OVERLAY_DIR=$REPO/integration/overlay
+BASE_DIR=$OVERLAY_DIR/base
+BASE_SUMS=$OVERLAY_DIR/BASE.sha256
+OVERLAY_CORE_SUMS=$OVERLAY_DIR/OVERLAY.sha256
+OVERLAY_SUMS=$OVERLAY_DIR/SHA256SUMS
+CARD=$REPO/plugin/RecordingNotificationCard.qml
+
+TARGET=${LOOM_NOTIFICATION_CLONE:-$HOME/.config/omarchy/plugins/andres.notifications}
+RESTART=1
+VALIDATE=1
+DRY_RUN=0
+COMMAND=
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    apply|restore|status)
+      [[ -z $COMMAND ]] || { echo "loom-notifications-overlay: duplicate command" >&2; exit 1; }
+      COMMAND=$1
+      shift
+      ;;
+    --target)
+      [[ $# -ge 2 && $2 != -* ]] || { echo "loom-notifications-overlay: $1 requires a directory" >&2; exit 1; }
+      TARGET=$2
+      shift 2
+      ;;
+    --no-restart) RESTART=0; shift ;;
+    --no-validate) VALIDATE=0; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --*) echo "loom-notifications-overlay: unknown option: $1" >&2; usage >&2; exit 1 ;;
+    *) echo "loom-notifications-overlay: unknown argument: $1" >&2; usage >&2; exit 1 ;;
+  esac
+done
+
+[[ -n $COMMAND ]] || { usage >&2; exit 1; }
+
+die() {
+  echo "loom-notifications-overlay: $*" >&2
+  exit 1
+}
+
+refuse() {
+  echo "loom-notifications-overlay: $*" >&2
+  echo "unknown" >&2
+  exit 2
+}
+
+need_files() {
+  local root=$1
+  [[ -f $OVERLAY_DIR/NotificationLogic.js && -f $OVERLAY_DIR/Service.qml &&
+     -f $OVERLAY_DIR/components/NotificationCard.qml && -f $CARD &&
+     -f $BASE_DIR/NotificationLogic.js && -f $BASE_DIR/Service.qml &&
+     -f $BASE_DIR/components/NotificationCard.qml &&
+     -f $BASE_SUMS && -f $OVERLAY_CORE_SUMS && -f $OVERLAY_SUMS ]] ||
+    die "overlay payload missing under $OVERLAY_DIR"
+  [[ -f $root/NotificationLogic.js && -f $root/Service.qml &&
+     -f $root/components/NotificationCard.qml ]] ||
+    refuse "clone is missing tracked notification files: $root"
+}
+
+clone_identity_ok() {
+  local root=$1
+  [[ -f $root/manifest.json ]] || return 1
+  python3 - "$root/manifest.json" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+if data.get("id") != "andres.notifications":
+    sys.exit(1)
+if (data.get("omarchy") or {}).get("clonedFrom") != "omarchy.notifications":
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
+sums_match() {
+  local root=$1 sums=$2
+  # sha256sum -c paths are relative to the clone. Overlay sums include the card.
+  (cd "$root" && sha256sum -c --strict "$sums") >/dev/null 2>&1
+}
+
+card_matches() {
+  local root=$1
+  [[ -f $root/components/RecordingNotificationCard.qml ]] &&
+    cmp -s "$CARD" "$root/components/RecordingNotificationCard.qml"
+}
+
+classify() {
+  local root=$1
+  if sums_match "$root" "$OVERLAY_CORE_SUMS" && card_matches "$root"; then
+    echo overlay
+  elif sums_match "$root" "$BASE_SUMS"; then
+    echo baseline
+  else
+    echo unknown
+  fi
+}
+
+backup_clone() {
+  local root=$1
+  local live=$HOME/.config/omarchy/plugins/andres.notifications
+  [[ $(readlink -f "$root") == "$(readlink -f "$live" 2>/dev/null || true)" ]] || return 0
+  local dest=${XDG_STATE_HOME:-$HOME/.local/state}/loom/notification-backups/$(date +%Y%m%d_%H%M%S)
+  mkdir -p "$dest"
+  cp -a "$root" "$dest/"
+}
+
+install_file() {
+  local src=$1 dest=$2
+  mkdir -p "$(dirname "$dest")"
+  local tmp
+  tmp=$(mktemp "$dest.XXXXXX")
+  cp -a "$src" "$tmp"
+  mv -f "$tmp" "$dest"
+}
+
+maybe_validate() {
+  local root=$1
+  (( VALIDATE )) || return 0
+  command -v omarchy >/dev/null 2>&1 || return 0
+  omarchy plugin validate "$root" >/dev/null
+}
+
+maybe_restart() {
+  (( RESTART )) || return 0
+  (( DRY_RUN )) && return 0
+  if command -v omarchy-restart-shell >/dev/null 2>&1; then
+    omarchy-restart-shell >/dev/null 2>&1 || true
+  elif command -v omarchy >/dev/null 2>&1; then
+    omarchy restart shell >/dev/null 2>&1 || true
+  fi
+}
+
+copy_overlay_files() {
+  local root=$1
+  install_file "$OVERLAY_DIR/NotificationLogic.js" "$root/NotificationLogic.js"
+  install_file "$OVERLAY_DIR/Service.qml" "$root/Service.qml"
+  install_file "$OVERLAY_DIR/components/NotificationCard.qml" "$root/components/NotificationCard.qml"
+  install_file "$CARD" "$root/components/RecordingNotificationCard.qml"
+}
+
+copy_baseline_files() {
+  local root=$1
+  install_file "$BASE_DIR/NotificationLogic.js" "$root/NotificationLogic.js"
+  install_file "$BASE_DIR/Service.qml" "$root/Service.qml"
+  install_file "$BASE_DIR/components/NotificationCard.qml" "$root/components/NotificationCard.qml"
+  rm -f -- "$root/components/RecordingNotificationCard.qml"
+}
+
+if [[ ! -d $TARGET ]]; then
+  echo "loom-notifications-overlay: no notification clone at $TARGET (rich card skipped)" >&2
+  echo skipped
+  exit 0
+fi
+
+need_files "$TARGET"
+clone_identity_ok "$TARGET" || refuse "refusing $TARGET (not andres.notifications cloned from omarchy.notifications)"
+
+state=$(classify "$TARGET")
+
+case "$COMMAND" in
+  status)
+    echo "$state" >&2
+    echo "$state"
+    exit 0
+    ;;
+  apply)
+    case "$state" in
+      overlay)
+        echo "loom-notifications-overlay: already applied" >&2
+        echo unchanged
+        exit 0
+        ;;
+      unknown)
+        refuse "clone hashes do not match frozen baseline or overlay; leaving $TARGET untouched"
+        ;;
+      baseline)
+        if (( DRY_RUN )); then
+          echo "loom-notifications-overlay: would apply overlay to $TARGET" >&2
+          echo updated
+          exit 0
+        fi
+        backup_clone "$TARGET"
+        copy_overlay_files "$TARGET"
+        sums_match "$TARGET" "$OVERLAY_SUMS" && card_matches "$TARGET" ||
+          die "overlay copy did not match expected hashes"
+        maybe_validate "$TARGET"
+        echo "loom-notifications-overlay: applied rich recording card to $TARGET" >&2
+        echo updated
+        maybe_restart
+        exit 0
+        ;;
+    esac
+    ;;
+  restore)
+    case "$state" in
+      baseline)
+        [[ -f $TARGET/components/RecordingNotificationCard.qml ]] || {
+          echo "loom-notifications-overlay: already baseline" >&2
+          echo unchanged
+          exit 0
+        }
+        ;;
+      unknown)
+        refuse "clone hashes do not match overlay; not restoring $TARGET"
+        ;;
+      overlay) ;;
+    esac
+    if (( DRY_RUN )); then
+      echo "loom-notifications-overlay: would restore baseline at $TARGET" >&2
+      echo restored
+      exit 0
+    fi
+    backup_clone "$TARGET"
+    copy_baseline_files "$TARGET"
+    sums_match "$TARGET" "$BASE_SUMS" || die "restore did not match baseline hashes"
+    [[ ! -e $TARGET/components/RecordingNotificationCard.qml ]] ||
+      die "recording card still present after restore"
+    maybe_validate "$TARGET"
+    echo "loom-notifications-overlay: restored baseline notifications at $TARGET" >&2
+    echo restored
+    maybe_restart
+    exit 0
+    ;;
+esac

@@ -43,9 +43,33 @@ found=0
 # Close Loom-owned popup before unloading service plugin.
 command -v omarchy-shell >/dev/null && omarchy-shell -q loom-toast close >/dev/null 2>&1 || true
 
+# Restore framed notifications baseline while the program tree still exists.
+# Unknown clones stay untouched. Do this before removing command links.
+script_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")" && pwd || true)
+overlay_helper=
+if [[ -n ${script_dir:-} && -x $script_dir/libexec/loom-notifications-overlay ]]; then
+  overlay_helper=$script_dir/libexec/loom-notifications-overlay
+elif [[ -x $INSTALL_DIR/libexec/loom-notifications-overlay ]]; then
+  overlay_helper=$INSTALL_DIR/libexec/loom-notifications-overlay
+elif [[ -L $HOME/.local/bin/loom ]]; then
+  overlay_helper=$(dirname "$(dirname "$(readlink -f "$HOME/.local/bin/loom")")")/libexec/loom-notifications-overlay
+fi
+if [[ -x ${overlay_helper:-} ]]; then
+  restore_status=0
+  restore_result=
+  restore_result=$("$overlay_helper" restore --no-restart) || restore_status=$?
+  if (( restore_status == 0 )); then
+    [[ $restore_result == unchanged ]] || found=1
+  elif (( restore_status == 2 )); then
+    echo "Kept modified notification clone (hashes were not the Loom overlay)" >&2
+  else
+    echo "loom uninstall: notification overlay restore failed; clone left untouched" >&2
+  fi
+fi
+
 # Remove command links only when targets belong to Loom tree. Broken links into managed install
 # directory are safe to remove too. Regular files and unrelated symlinks stay untouched.
-for name in loom loom-cam loom-mic-level loom-pause loom-status loom-upload; do
+for name in loom loom-cam loom-mic-level loom-pause loom-status loom-upload loom-notify; do
   path=$HOME/.local/bin/$name
   [[ -L $path ]] || continue
   raw_target=$(readlink "$path")
