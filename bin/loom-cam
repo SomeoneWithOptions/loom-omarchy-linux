@@ -10,6 +10,7 @@ set -u
 
 MASK=/tmp/loom-mask.png
 CAM_TITLE=WebcamOverlay
+CAM=${XDG_RUNTIME_DIR:-/tmp}/loom-camera
 # Inset from the screen corner, and opening diameter. Both are handed to the window rules below,
 # so one env var moves the rough placement and the exact one together.
 MARGIN=${LOOM_MARGIN:-40}
@@ -17,17 +18,48 @@ SIZE=${LOOM_SIZE:-360}
 # readlink: this script normally runs from a ~/.local/bin symlink into the repo.
 REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 
+overlay_fail() {
+  rm -f "$CAM"
+  [[ -z ${cam_pid:-} ]] || { kill "$cam_pid" 2>/dev/null || true; wait "$cam_pid" 2>/dev/null || true; }
+  notify-send "loom: camera overlay failed" "$1" 2>/dev/null || true
+  exit 1
+}
+
+# kill -0 is true for zombies, so a failed mpv would otherwise burn the whole map wait.
+cam_running() {
+  local st
+  [[ -n ${cam_pid:-} ]] || return 1
+  st=$(awk '/^State:/{print $2; exit}' /proc/"$cam_pid"/status 2>/dev/null) || return 1
+  [[ $st != Z ]]
+}
+
+# Colour capture node: MJPG/YUYV, validated by v4l2-ctl (not -e/-c) so by-id paths and mocks work.
+# Metadata and IR/GREY nodes are skipped. A failed ioctl is "not this node", not a crash.
+color_capable() {
+  local fmt
+  fmt=$(v4l2-ctl -d "$1" --list-formats 2>/dev/null) || return 1
+  [[ $fmt == *MJPG* || $fmt == *YUYV* ]]
+}
+
+card_name() {
+  local card
+  card=$(v4l2-ctl -d "$1" --info 2>/dev/null | awk -F' *: *' '/Card type/{print $2; exit}')
+  printf '%s\n' "${card:-$(basename "$1")}"
+}
+
 # Pick order: explicit argument, $LOOM_CAM, first external camera, then the internal one.
 # A camera can expose several V4L2 nodes: the real RGB capture node, a metadata node with no
 # capture formats, and — on SunplusIT built-ins — an IR node that only does GREY. The by-id
 # "-video-index0" symlink on those points at the IR node, so grabbing by-id shows the IR
 # camera, which looks negative and blinks. Select by capability instead: colour formats only
 # (MJPG/YUYV), external card name preferred, first match wins.
+# An explicit selection (argument or LOOM_CAM) that fails must not silently fall through.
 device="${1:-${LOOM_CAM:-}}"
-if [[ -z $device ]]; then
+if [[ -n $device ]]; then
+  color_capable "$device" || overlay_fail "camera unavailable: $device"
+else
   for d in /dev/video*; do
-    fmt=$(v4l2-ctl -d "$d" --list-formats 2>/dev/null)
-    [[ $fmt == *MJPG* || $fmt == *YUYV* ]] || continue
+    color_capable "$d" || continue
     card=$(v4l2-ctl -d "$d" --info 2>/dev/null | awk -F' *: *' '/Card type/{print $2; exit}')
     if [[ $card =~ [Ii]ntegrated|[Bb]uilt[-_]?[Ii]n ]]; then
       internal=${internal:-$d}
@@ -38,25 +70,23 @@ if [[ -z $device ]]; then
   done
   device=${device:-${internal:-}}
 fi
-[[ -n $device ]] || {
-  notify-send "loom: no webcam found" -u critical
-  exit 1
-}
 
-# Name for the bar panel. uvc repeats the name in "Card type" and v4l2 truncates the copy
-# ("OBSBOT Meet 2: OBSBOT Meet 2 St"), so take the part before the colon; the by-id path is the
-# fallback for a driver that reports no card name.
-card=$(v4l2-ctl -d "$device" --info 2>/dev/null | awk -F' *: *' '/Card type/{print $2; exit}')
-printf '%s\n' "${card:-$(basename "$device")}" >"${XDG_RUNTIME_DIR:-/tmp}/loom-camera"
+# No compatible camera is normal: clear stale panel metadata and leave the recording running.
+[[ -n $device ]] || { rm -f "$CAM"; exit 0; }
+
+cam_name=$(card_name "$device")
 
 # One 512px white-circle-on-black frame, generated once. geq is slow per-pixel, which is fine
 # for a single still and would not be for live video.
-[[ -f $MASK ]] || ffmpeg -y -v error -f lavfi -i "color=black:s=512x512" \
-  -vf "geq=lum='if(lte(hypot(X-256,Y-256),255),255,0)':cb=128:cr=128,format=gray" \
-  -frames:v 1 -update 1 "$MASK"
+if [[ ! -f $MASK ]]; then
+  ffmpeg -y -v error -f lavfi -i "color=black:s=512x512" \
+    -vf "geq=lum='if(lte(hypot(X-256,Y-256),255),255,0)':cb=128:cr=128,format=gray" \
+    -frames:v 1 -update 1 "$MASK" || overlay_fail "could not generate camera mask"
+  [[ -f $MASK ]] || overlay_fail "could not generate camera mask"
+fi
 
 # Safe in a script file (argv is just this path), unlike the same line typed into a shell.
-pkill -f "$CAM_TITLE" 2>/dev/null
+pkill -f "$CAM_TITLE" 2>/dev/null || true
 
 # Register the window rules now, in the running Hyprland, instead of from ~/.config/hypr — loom
 # then owns every file it needs and nothing it installs is wiped by an omarchy update or a
@@ -80,6 +110,26 @@ mpv "av://v4l2:$device" --external-file="$MASK" \
   >/dev/null 2>&1 &
 cam_pid=$!
 
+# Position after it maps, not with a `move` rule: mpv maps before it knows its own size, so a
+# rule evaluating window_w (or a percentage) lands the overlay in the middle of the screen.
+#
+# `hyprctl dispatch` takes Lua as of Quattro's Hyprland — the old
+# `movewindowpixel "exact X Y,class:..."` string now fails to parse and silently left the overlay
+# wherever the map rule put it, which is centre screen.
+#
+# Name is published only once the child is alive and mapped: a failed open must not leave a stale
+# camera row in the panel. The resize watcher waits for that too, so a dead mpv can't orphan it.
+w= h=
+for _ in {1..30}; do
+  cam_running || { w=; break; }
+  read -r w h <<<"$(hyprctl clients -j | jq -r '.[] | select(.class == "loom-cam") | "\(.size[0]) \(.size[1])"')"
+  [[ -n ${w:-} ]] && break
+  sleep 0.1
+done
+cam_running && [[ -n ${w:-} ]] || overlay_fail "camera overlay did not start"
+
+printf '%s\n' "$cam_name" >"$CAM"
+
 # Keep the window square, so a drag can't crop the circle. Hyprland 0.56 has no
 # `keepaspectratio` rule and mpv can't ask Wayland for an aspect-locked toplevel, so the axis
 # that moved most wins and the other follows it — grow or shrink, same behaviour.
@@ -100,20 +150,7 @@ cam_pid=$!
   done
 ) >/dev/null 2>&1 &
 
-# Position after it maps, not with a `move` rule: mpv maps before it knows its own size, so a
-# rule evaluating window_w (or a percentage) lands the overlay in the middle of the screen.
-#
-# `hyprctl dispatch` takes Lua as of Quattro's Hyprland — the old
-# `movewindowpixel "exact X Y,class:..."` string now fails to parse and silently left the overlay
-# wherever the map rule put it, which is centre screen.
-for _ in {1..30}; do
-  read -r w h <<<"$(hyprctl clients -j | jq -r '.[] | select(.class == "loom-cam") | "\(.size[0]) \(.size[1])"')"
-  [[ -n ${w:-} ]] && break
-  sleep 0.1
-done
-if [[ -n ${w:-} ]]; then
-  # Monitor origin included: on a second display the logical origin isn't 0,0, and without it the
-  # overlay lands on the wrong screen (or off the edge of it).
-  read -r mx my mw mh <<<"$(hyprctl monitors -j | jq -r '.[] | select(.focused) | "\(.x) \(.y) \(.width / .scale | floor) \(.height / .scale | floor)"')"
-  hyprctl dispatch "hl.dsp.window.move({ window = \"class:loom-cam\", x = $((mx + mw - w - MARGIN)), y = $((my + mh - h - MARGIN)) })" >/dev/null
-fi
+# Monitor origin included: on a second display the logical origin isn't 0,0, and without it the
+# overlay lands on the wrong screen (or off the edge of it).
+read -r mx my mw mh <<<"$(hyprctl monitors -j | jq -r '.[] | select(.focused) | "\(.x) \(.y) \(.width / .scale | floor) \(.height / .scale | floor)"')"
+hyprctl dispatch "hl.dsp.window.move({ window = \"class:loom-cam\", x = $((mx + mw - w - MARGIN)), y = $((my + mh - h - MARGIN)) })" >/dev/null

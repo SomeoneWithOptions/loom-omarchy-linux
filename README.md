@@ -171,9 +171,20 @@ critical toast fires at start, the bar icon becomes `󰍭` for as long as it las
 shows `MUTED` plus a warning strip. Pause still wins the bar icon: a paused recording isn't losing
 anything.
 
-The mute is polled on the **pulse source name snapshotted at start**, not `@DEFAULT_SOURCE@`. gsr
+**The mic is optional, and desktop audio is never substituted.** Before launching the recorder,
+`loom` reads the default input: if there is no default source, the lookup fails, or the default
+is a monitor (desktop audio), the recording starts screen-only — no microphone audio, and no
+implicit fallback to capturing the monitor. A usable microphone is recorded as before, with the
+muted-mic warning intact.
+
+The mute is polled on the **pulse source name snapshotted after the recorder launches**, not
+`@DEFAULT_SOURCE@`. gsr
 resolves `default_input` once and keeps it, so once the system default moves mid-recording
-`@DEFAULT_SOURCE@` is answering about a device that isn't in the file.
+`@DEFAULT_SOURCE@` is answering about a device that isn't in the file. Because Omarchy exposes
+no pinned-source API, the pre-launch probe only decides the `--with-microphone-audio` flag and
+the snapshot is re-read once gsr is confirmed up — best-effort, not an atomic capture of the
+source. If that post-launch lookup fails, the panel shows no mic rather than a possibly stale
+name.
 
 **The level meter runs only while the panel is open.** Unmuted is not the same as audible — wrong
 device, dead cable, gain at zero — and the meter is the part that proves it hears you. It's
@@ -188,17 +199,28 @@ every few KB — at ~60 bytes per line that is a meter which updates once every 
 loses its tail when killed. The script `exec`s ffmpeg for the same reason in reverse: the panel's
 kill has to land on ffmpeg itself, or it orphans a live audio capture.
 
-### Which camera it picks
+### Camera optional, and which camera it picks
 
-An external camera by preference, the built-in one only if that's all there is. Enumeration
-order can't decide this — the laptop camera is always `/dev/video0` and a USB one lands on
-`/dev/video4` or later — so the pick is: `$1`, then `$LOOM_CAM`, then the first
-`/dev/v4l/by-id/*-video-index0` whose name doesn't say *Integrated* or *Built-in*, then the
-first camera of any kind.
+Recording works without a camera at all. If no compatible webcam is found, `loom` records the
+screen, the camera row simply doesn't appear in the panel, and the top-bar icon, timer,
+Pause/Resume and Stop keep working as usual — there's no missing-camera toast. Standalone
+`loom-cam` exits successfully on ordinary absence (after clearing any stale camera name from the
+panel); it only reports failure when an explicit selection doesn't work or the overlay itself
+can't start.
 
-The `by-id` paths are the ones to pin by hand, too: `/dev/videoN` numbers move when you re-plug
-or reboot, those names don't. `ls /dev/v4l/by-id/` to see yours, and take an `-index0` — the
-`-index1` node carries metadata, not frames, so it opens and shows nothing.
+The pick is: `$1`, then `$LOOM_CAM`, then the first external `/dev/video` node that can capture
+colour (MJPG or YUYV per `v4l2-ctl --list-formats`), then an internal node that can. Nodes that
+only carry metadata or an IR/GREY feed are skipped. An explicit selection (argument or
+`$LOOM_CAM`) is validated and never falls through to another camera — an unavailable explicit
+camera is an overlay diagnostic, not a reason to pick a different device, and `loom` keeps
+recording through it.
+
+Capability is checked per node, not by `by-id` naming: a built-in can expose several V4L2 nodes
+(real RGB capture, metadata-only, and an IR node that only does GREY — on some SunplusIT
+built-ins the `by-id` `-video-index0` symlink points at the IR node, which looks negative and
+blinks). The `by-id` paths are still the stable ones to pin by hand — `/dev/videoN` numbers move
+when you re-plug or reboot, those names don't — but take the node whose formats list MJPG or
+YUYV, not just `-index0`.
 
 ### Why the circle is in the video, not in the window rules
 
@@ -247,10 +269,21 @@ Paused time is **dropped** from the file, not frozen (gsr 6.0.0, measured: 3s + 
 ## Test
 
 ```bash
-./test/status-checks.sh # headless recorder-state, timer and mic-mute checks
-./test/upload-checks.sh # headless Loom handoff check
-./test/checks.sh        # live webcam/Hyprland checks
+./test/status-checks.sh               # headless recorder-state, timer and mic-mute checks
+./test/upload-checks.sh               # headless Loom handoff check
+./test/recording-checks.sh            # headless optional-camera/mic recording checks
+node ./test/recording-panel-checks.js # headless Panel.qml contract checks
+./test/checks.sh                      # live webcam/Hyprland checks
 ```
+
+`recording-checks.sh` and `recording-panel-checks.js` are fully mocked and headless: the bash
+suite stubs every desktop/audio/camera command (`pactl`, `v4l2-ctl`, `mpv`, the recorder,
+`hyprctl`) in an isolated temp dir and asserts the camera-optional behaviour — screen-only
+recording with no camera or no usable mic, camera precedence (argument > `LOOM_CAM` > external
+colour node > internal), nonfatal overlay and explicit-camera failures, and the post-launch mic
+snapshot; the node suite extracts the panel's state functions and evaluates them in a `vm`, so
+it verifies the JS contracts, not live QML rendering or the bar process. Only `test/checks.sh`
+drives a real webcam and the running Hyprland.
 
 Asserts the overlay launches with its rules applied, that it reaches the bottom-right corner, that
 it wrote a camera name for the panel to show, and that the generated mask is round and `alphamerge`

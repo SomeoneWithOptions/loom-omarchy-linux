@@ -54,11 +54,63 @@ fi
 rm -f "$ACTIVE" "$PAUSED" "$PAUSED_TOTAL" "$STARTED" "$MIC" "$MIC_SOURCE" "$CAM"
 find "$STATE_DIR" -maxdepth 1 -name 'loom-preview-*.png' -mtime +7 -delete 2>/dev/null || true
 
+# Probe the default input before the picker only to decide the launch args: Omarchy either
+# passes default_input to gsr (--with-microphone-audio) or records with no audio args. A
+# missing/failed lookup, a source that isn't in the list, or a monitor source means screen-only
+# — never substitute desktop audio. Omarchy has no pinned-source API, so this probe is not the
+# captured device: the default can change during the picker, and gsr then records whatever
+# default_input is at launch. After gsr is confirmed up, re-read the default and snapshot that
+# launch-time source for the panel — best-effort, not an atomic capture. If that post-launch
+# lookup fails, omit mic metadata rather than publish a stale pre-picker source.
+read_default_mic() {
+  source_name=
+  muted=
+  description=
+  local sources_json mic_line monitor_class
+  source_name=$(pactl get-default-source 2>/dev/null) || source_name=
+  [[ -n $source_name ]] || return 1
+  # Capture pactl's status ourselves: a pipeline into jq would keep jq's 0 even when pactl
+  # printed valid JSON and then exited nonzero.
+  if ! sources_json=$(pactl -f json list sources 2>/dev/null); then
+    source_name=
+    return 1
+  fi
+  # Class/mute must be nonempty so TSV never starts with a tab. Bash treats tab as IFS
+  # whitespace and would otherwise collapse a missing device.class, shifting mute into class
+  # and the description into mute.
+  mic_line=$(jq -r --arg n "$source_name" '
+    .[] | select(.name == $n) |
+    [
+      ((.properties["device.class"] // "") | if . == "" then "sound" else . end),
+      (.mute == true | tostring),
+      (.description // "")
+    ] | @tsv
+  ' <<<"$sources_json" 2>/dev/null) || mic_line=
+  [[ -n ${mic_line:-} ]] || { source_name=; return 1; }
+  IFS=$'\t' read -r monitor_class muted description <<<"$mic_line"
+  if [[ ${monitor_class:-} == monitor || $source_name == *.monitor ]]; then
+    source_name=
+    muted=
+    description=
+    return 1
+  fi
+  return 0
+}
+
+have_mic=0
+if read_default_mic; then
+  have_mic=1
+fi
+
 # Recorder FIRST: it returns once gsr is up, so nothing extra is in the slurp picker.
 # gsr running is the signal, not the exit code: a cancelled picker and a failed start both come
 # back non-zero, and the exit code says nothing about whether an overlay would be orphaned.
-omarchy-capture-screenrecording --with-microphone-audio
-pid=$(pgrep -o -f "$GSR") || exit 1 # picker cancelled -> no orphan overlay
+if [[ $have_mic -eq 1 ]]; then
+  omarchy-capture-screenrecording --with-microphone-audio
+else
+  omarchy-capture-screenrecording
+fi
+pid=$(pgrep -o -f "$GSR") || exit 1 # picker cancelled -> no overlay, no published state
 printf '%s\n' "$pid" >"$ACTIVE"       # lets the bar distinguish Loom from other recordings
 
 # Timer baseline, published after the PID so a loom-status poll landing in between can't sweep it
@@ -67,24 +119,25 @@ read -r uptime_now _ </proc/uptime
 printf '%s\n' "${uptime_now%.*}" >"$STARTED"
 printf '0\n' >"$PAUSED_TOTAL"
 
-# Snapshot the mic for the panel. A snapshot, not a live read: gsr resolves `default_input` once,
-# when it starts, and then keeps that source for the whole recording — changing the system default
-# mid-recording leaves gsr on the old one (measured), so the value at start is the true one.
-# Both the pulse name and the description are kept: the panel shows the description and polls the
-# name, which is the only handle that still points at gsr's source if the default moves.
-source_name=$(pactl get-default-source 2>/dev/null)
-[[ -z $source_name ]] || printf '%s\n' "$source_name" >"$MIC_SOURCE"
-read -r muted description < <(pactl -f json list sources 2>/dev/null |
-  jq -r --arg n "$source_name" '.[] | select(.name == $n) | "\(.mute) \(.description)"') || true
-printf '%s\n' "${description:-}" >"$MIC"
-
-# The one mistake that costs a whole take. The panel shows it for as long as it lasts; this fires
-# once, now, while the recording is still a few seconds long.
-if [[ ${muted:-} == true ]]; then
-  omarchy-notification-send -u critical -t 8000 "Loom: microphone is muted" \
-    "${description:-Default input} is muted — this recording will have no voice."
+if [[ $have_mic -eq 1 ]]; then
+  # Re-read after launch: the pre-picker probe only decided the flag. If the default moved during
+  # the picker, this is the source gsr's default_input most likely captured. Failed lookup here
+  # leaves the panel at unknown — better than asserting the pre-picker source was recorded.
+  if read_default_mic; then
+    printf '%s\n' "$source_name" >"$MIC_SOURCE"
+    printf '%s\n' "${description:-}" >"$MIC"
+    # The one mistake that costs a whole take. The panel shows it for as long as it lasts; this fires
+    # once, now, while the recording is still a few seconds long.
+    if [[ ${muted:-} == true ]]; then
+      omarchy-notification-send -u critical -t 8000 "Loom: microphone is muted" \
+        "${description:-Default input} is muted — this recording will have no voice."
+    fi
+  fi
 fi
 
 hyprctl eval "o.bind([[$PAUSE_KEY]], [[Pause recording]], [[$BIN/loom-pause]])" >/dev/null
 
-exec loom-cam "$@" # "$@" = optional /dev/videoN override
+# Overlay is optional: a missing camera or a failed helper must not fail the recording, and must
+# not kill gsr. Nonzero from loom-cam is an overlay error, not a recording error.
+loom-cam "$@" || true # "$@" = optional /dev/videoN override
+exit 0
