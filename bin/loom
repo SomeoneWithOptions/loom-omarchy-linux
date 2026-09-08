@@ -36,7 +36,9 @@ if pgrep -f "$GSR" >/dev/null; then
   if [[ -f $saved && -f $filename ]]; then
     preview=$STATE_DIR/loom-preview-$(basename "${filename%.mp4}").png
     ffmpeg -y -v error -ss 0.1 -i "$filename" -frames:v 1 -q:v 2 "$preview" 2>/dev/null || preview=
-    if ! omarchy-shell loom-toast show "$filename" "$preview" >/dev/null 2>&1; then
+    if "${LOOM_NOTIFY_BIN:-$BIN/loom-notify}" "$filename" "$preview" >/dev/null; then
+      [[ -z $preview ]] || rm -f "$preview"
+    else
       fallback=("Screen recording saved" "Click to open" -t 0)
       [[ -z $preview ]] || fallback+=(--image "$preview")
       fallback+=(--exec mpv -- "$filename")
@@ -49,9 +51,8 @@ if pgrep -f "$GSR" >/dev/null; then
 fi
 
 # Also clear stale state on start: recordings can be stopped outside Loom's own stop path.
-omarchy-shell -q loom-toast close
-rm -f "$ACTIVE" "$PAUSED" "$PAUSED_TOTAL" "$STARTED" "$MIC" "$MIC_SOURCE" "$CAM" \
-  "$STATE_DIR"/loom-preview-*.png
+rm -f "$ACTIVE" "$PAUSED" "$PAUSED_TOTAL" "$STARTED" "$MIC" "$MIC_SOURCE" "$CAM"
+find "$STATE_DIR" -maxdepth 1 -name 'loom-preview-*.png' -mtime +7 -delete 2>/dev/null || true
 
 # Recorder FIRST: it returns once gsr is up, so nothing extra is in the slurp picker.
 # gsr running is the signal, not the exit code: a cancelled picker and a failed start both come

@@ -74,6 +74,8 @@ the rough placement and the exact one can't drift apart:
 | `$LOOM_MARGIN` | 40 | inset from the screen corner |
 | `$LOOM_CAM` | auto | camera device, see below |
 
+The saved-recording toast picks a random pastel for the **Upload to Loom** accent each time it opens. Palette lives in `plugin/toast-accents.lua` (same hex list as flicko-picker's `color` file). Add or remove `#rrggbb` lines; comments ignored. Empty file falls back to the theme urgent color. FileView reloads on save, so the next toast uses the new list without a shell restart.
+
 Anything else is a window rule, and **later rules win**, so append your own to `hypr/loom.lua`:
 
 ```lua
@@ -89,10 +91,11 @@ covers which rules are load-bearing.
 | | |
 |---|---|
 | `loom` | start — click a window/monitor or drag a region in the picker |
-| `loom` again | stop, process, save to `~/Videos/`, then show a preview toast that stays until you act |
-| Click the toast preview | open the local file in mpv |
+| `loom` again | stop, process, save to `~/Videos/`, then display a rich persistent recording card in the native notification stack |
+| Click the card preview | open the local file in mpv (the only left-click play target on the card) |
 | Click **Upload to Loom** below the preview | open Loom and reveal the selected video for upload |
-| Click the toast **×** | dismiss the toast without opening or uploading |
+| Click the card **×** or right-click card | dismiss the card without opening or uploading |
+| `omarchy-shell notifications invokeLast` | trigger default play action in mpv for latest popup (no generic Enter or whole-card click) |
 | Click the red top-bar icon | open the recording panel — elapsed time, camera, mic and mic level |
 | Bar icon turns into a crossed-out mic | the mic being recorded is muted; the panel says so too |
 | Panel Pause/Resume or `SUPER ALT P` | pause / unpause; paused time is dropped from the file |
@@ -106,6 +109,61 @@ The upload action stays on Loom's supported web flow: it opens the video library
 processed file in the file manager. Choose **New Video → Upload Video**, then drag the selected file
 into Loom. Loom has no public upload API, so the tool never stores browser cookies or Loom
 credentials and never uploads a recording without another explicit user action.
+
+### Native Notification Stack Integration
+
+Loom recordings integrate directly into Omarchy's native notification stack instead of spawning a separate, competing overlay window. When a recording finishes, `bin/loom` triggers `bin/loom-notify`, which dispatches a typed D-Bus notification containing private `x-loom-recording` metadata hints.
+
+> **Note**: Rich notification renderer integration is strictly opt-in and maintained outside the normal `loom` installer. On unpatched systems, `bin/loom-notify` works out-of-the-box by sending standard fallback notifications.
+
+- **Stack Geometry & Coexistence**: The card renders within the native top-right notification column with standard width 360px (`Style.space(360)`), a 112px tall video thumbnail (`Style.space(112)`), and an overall card height of ~204–206px adhering to the user's 1px borders and theme radius. Multiple recordings can coexist simultaneously in chronological (newest-first) order alongside ordinary system notifications.
+- **Persistence & Expiry**: With the rich renderer installed, Loom cards are persistent (`popupDuration` returns 0; no auto-dismissal countdown timer), remaining visible until explicitly played, uploaded, or dismissed. For standard system notifications, low and normal urgency notifications auto-expire (5–30s based on urgency), while critical urgency notifications remain persistent.
+- **Controls & Default Action**:
+  - Click the large thumbnail: plays the local recording in `mpv` (the thumbnail preview is the only left-click target on the card that starts playback; clicking the card body does not trigger play).
+  - Click the **Upload to Loom** accent button: initiates the web upload handoff.
+  - Click **×** or right-click the card: dismisses the notification.
+  - Default activation IPC: `omarchy-shell notifications invokeLast` triggers the default play action in `mpv` for the active popup. There is no generic keyboard `Enter` listener or whole-row click handler.
+- **Do Not Disturb (DND)**: Respects Omarchy's DND toggle. During DND, notifications do not pop up on screen, but remain preserved in history and state.
+- **Restart Survival**: Full card metadata (`version`, `videoPath`, `accent`) is saved to disk in `~/.local/state/omarchy/notifications/`. On shell restart, unexpired and persistent cards are restored without losing state.
+- **Palette & Accent Selection**: The **Upload to Loom** button picks a pastel accent from `plugin/toast-accents.lua` (15 unique hex colors). Comments (lines starting with `--`) are stripped, and consecutive selections avoid repetition.
+- **Direct CLI Tool**: You can trigger notifications directly with `bin/loom-notify <video-path> [preview-path] [accent]`.
+- **Headless IPC Bridge**: The plugin maintains `plugin/UploadToast.qml` as a headless bridge for backwards compatibility. IPC call `omarchy-shell loom-toast show` returns `queued` without creating any rogue window overlay, and `close` is a safe no-op.
+- **Preview Staging & Cleanup**: Video thumbnails are staged in `${XDG_STATE_HOME:-$HOME/.local/state}/loom/previews`. Files older than 7 days are cleaned up conservatively only when not referenced by any live or history notifications. If metadata sidecars or state directories are missing or unreadable, cleanup fails closed and preserves all files.
+- **Fallback UI on Unpatched Systems**: On systems without the opt-in custom notification renderer, `bin/loom-notify` sends a standard desktop notification with the preview image and `expire_timeout: 0`. On a stock unpatched Omarchy shell, normal-urgency notifications auto-expire despite a 0 timeout. Other notification daemons decide their own expiry policy for `expire_timeout: 0` normal notifications (some keep it persistent, others force an auto-expiry timer). On supported Omarchy notification servers, the default action plays the video via `--exec` (note: not all notification daemons support `--exec`; where unsupported, the notification functions as an informational toast). Fallback notifications lack the rich Upload button.
+
+#### Custom Plugin Maintenance & Patch Upkeep
+
+The rich notification renderer lives outside this repository in your user-cloned Omarchy plugin (`~/.config/omarchy/plugins/<user>.notifications/`). The repository provides `plugin/RecordingNotificationCard.qml` and `integration/notifications.patch` for upkeep.
+
+> **IMPORTANT**:
+> - `integration/notifications.patch` targets the original frame-styled clone baseline used in this setup (`andres.notifications`), **NOT** any freshly cloned stock Omarchy service or arbitrary fork.
+> - Always run a dry run first (`patch --dry-run -p1`). The patch must cleanly apply; if your clone differs, manually port the changes (`NotificationLogic.js`, `Service.qml`, `components/NotificationCard.qml`).
+> - If your clone is already patched, **do NOT apply the patch again blindly** on updates, as reapplying will fail or cause corruption.
+> - Never edit stock files in `/usr/share/omarchy/`.
+
+To integrate or inspect your clone:
+1. **Back up your clone outside plugins root** (never place backups inside `~/.config/omarchy/plugins/` where Omarchy scans for plugins, and avoid fixed `.bak` names that create nested copies on repeat):
+   ```bash
+   BACKUP_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/loom/notification-backups/$(date +%Y%m%d_%H%M%S)"
+   mkdir -p "$BACKUP_DIR"
+   cp -r ~/.config/omarchy/plugins/$(whoami).notifications "$BACKUP_DIR/"
+   ```
+2. **Dry-run the patch against your clone**:
+   ```bash
+   cd ~/.config/omarchy/plugins/$(whoami).notifications && patch --dry-run -p1 < /path/to/loom-omarchy-linux/integration/notifications.patch
+   ```
+3. **Apply cleanly (initial installation only)**:
+   ```bash
+   patch -p1 < /path/to/loom-omarchy-linux/integration/notifications.patch
+   ```
+4. **Copy the canonical component**:
+   ```bash
+   cp /path/to/loom-omarchy-linux/plugin/RecordingNotificationCard.qml components/
+   ```
+5. **Validate and restart**:
+   ```bash
+   omarchy plugin validate . && omarchy restart shell
+   ```
 
 ### Elapsed time, and the mic actually being heard
 

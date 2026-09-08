@@ -1,0 +1,346 @@
+#!/bin/bash
+set -euo pipefail
+
+# bin/loom-notify <video-path> [preview-path] [accent]
+# Wire completed Loom recordings to standard D-Bus notification server.
+
+if [[ $# -lt 1 || -z "$1" ]]; then
+  echo "Usage: loom-notify <video-path> [preview-path] [accent]" >&2
+  exit 1
+fi
+
+raw_video="$1"
+if [[ ! -f "$raw_video" ]]; then
+  echo "Error: Video file does not exist or is not a regular file: $raw_video" >&2
+  exit 1
+fi
+
+video_path=$(realpath -- "$raw_video" 2>/dev/null || true)
+if [[ -z "$video_path" || ! -f "$video_path" ]]; then
+  echo "Error: Could not resolve canonical path for: $raw_video" >&2
+  exit 1
+fi
+
+raw_preview="${2:-}"
+raw_accent="${3:-}"
+
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+LOOM_STATE_DIR="$STATE_HOME/loom"
+PREVIEWS_DIR="$LOOM_STATE_DIR/previews"
+mkdir -p -m 0700 "$PREVIEWS_DIR"
+chmod 0700 "$PREVIEWS_DIR" 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# Preview ownership and staging
+# -----------------------------------------------------------------------------
+staged_preview=""
+if [[ -n "$raw_preview" && -f "$raw_preview" && -r "$raw_preview" ]]; then
+  ext="${raw_preview##*.}"
+  [[ "$ext" =~ ^[a-zA-Z0-9]+$ ]] || ext="png"
+
+  tmp_stage=$(mktemp "$PREVIEWS_DIR/staging.XXXXXXXXXX")
+  chmod 0600 "$tmp_stage"
+  if cp -f -- "$raw_preview" "$tmp_stage" 2>/dev/null; then
+    unique_name="preview-$(date +%s%N)-$$-$RANDOM.$ext"
+    staged_preview="$PREVIEWS_DIR/$unique_name"
+    mv -f -- "$tmp_stage" "$staged_preview"
+
+    # Sidecar mapping videoPath and creation timestamp
+    sidecar_tmp=$(mktemp "$PREVIEWS_DIR/meta.XXXXXXXXXX")
+    chmod 0600 "$sidecar_tmp"
+    jq -nc --arg vp "$video_path" --argjson ts "$(date +%s)" \
+      '{"videoPath":$vp,"createdAt":$ts}' > "$sidecar_tmp" 2>/dev/null || true
+    mv -f -- "$sidecar_tmp" "$staged_preview.meta" 2>/dev/null || true
+  else
+    rm -f -- "$tmp_stage"
+    staged_preview=""
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Conservative age-based cleanup for owned staged previews
+# -----------------------------------------------------------------------------
+cleanup_stale_previews() {
+  local notif_dir="$HOME/.local/state/omarchy/notifications"
+
+  python3 - "$PREVIEWS_DIR" "$notif_dir" <<'PY'
+import os
+import sys
+import json
+import time
+import urllib.parse
+
+previews_dir = sys.argv[1]
+notifs_dir = sys.argv[2]
+hist_dir = os.path.join(notifs_dir, "history")
+now = time.time()
+
+# 1. Clean abandoned staging and meta temporary files older than 1 hour (3600s)
+if os.path.isdir(previews_dir):
+    try:
+        for name in os.listdir(previews_dir):
+            if name.startswith("staging.") or name.startswith("meta."):
+                tmp_path = os.path.join(previews_dir, name)
+                if not os.path.islink(tmp_path) and os.path.isfile(tmp_path):
+                    if now - os.path.getmtime(tmp_path) > 3600:
+                        os.remove(tmp_path)
+    except Exception:
+        pass
+
+# 2. Check if notifications dir exists. Fail-closed: do not delete if absent.
+if not os.path.isdir(notifs_dir):
+    sys.exit(0)
+
+# 3. Read and parse all notification JSON records. Fail-closed if any scan or parse error.
+notif_files = []
+try:
+    for f in os.listdir(notifs_dir):
+        if f.endswith(".json"):
+            notif_files.append(os.path.join(notifs_dir, f))
+    if os.path.isdir(hist_dir):
+        for f in os.listdir(hist_dir):
+            if f.endswith(".json"):
+                notif_files.append(os.path.join(hist_dir, f))
+except Exception:
+    sys.exit(0)
+
+referenced_videos = set()
+referenced_images = set()
+referenced_basenames = set()
+
+def extract_file_path(val):
+    if not val or not isinstance(val, str):
+        return None
+    s = val
+    if s.startswith("file://"):
+        s = s[7:]
+        s = urllib.parse.unquote(s)
+    return s
+
+for nfile in notif_files:
+    try:
+        with open(nfile, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if not content:
+                # Malformed / empty notification file -> fail-closed skip cleanup
+                sys.exit(0)
+            data = json.loads(content)
+    except Exception:
+        sys.exit(0)
+
+    if not isinstance(data, dict):
+        sys.exit(0)
+
+    for key in ("image", "appIcon"):
+        val = data.get(key)
+        path = extract_file_path(val)
+        if path:
+            referenced_images.add(path)
+            try:
+                referenced_images.add(os.path.realpath(path))
+            except Exception:
+                pass
+            referenced_basenames.add(os.path.basename(path))
+
+    exec_argv = data.get("execArgv")
+    if isinstance(exec_argv, str) and exec_argv.startswith("["):
+        try:
+            exec_argv = json.loads(exec_argv)
+        except Exception:
+            pass
+    if isinstance(exec_argv, list):
+        for arg in exec_argv:
+            if isinstance(arg, str) and (arg.startswith("/") or arg.startswith("file://")):
+                p = extract_file_path(arg)
+                if p:
+                    referenced_videos.add(p)
+                    try:
+                        referenced_videos.add(os.path.realpath(p))
+                    except Exception:
+                        pass
+
+    lr = data.get("loomRecording")
+    if lr:
+        if isinstance(lr, str):
+            try:
+                lr_obj = json.loads(lr)
+            except Exception:
+                sys.exit(0)
+        elif isinstance(lr, dict):
+            lr_obj = lr
+        else:
+            sys.exit(0)
+
+        if isinstance(lr_obj, dict):
+            vp = lr_obj.get("videoPath")
+            if isinstance(vp, str) and vp:
+                referenced_videos.add(vp)
+                try:
+                    referenced_videos.add(os.path.realpath(vp))
+                except Exception:
+                    pass
+
+# 4. Scan candidates in previews_dir
+try:
+    if not os.path.isdir(previews_dir):
+        sys.exit(0)
+    entries = os.listdir(previews_dir)
+except Exception:
+    sys.exit(0)
+
+previews_dir_real = os.path.realpath(previews_dir)
+
+for name in entries:
+    if not name.startswith("preview-") or name.endswith(".meta"):
+        continue
+
+    cand_path = os.path.join(previews_dir, name)
+    try:
+        if os.path.islink(cand_path) or not os.path.isfile(cand_path):
+            continue
+        cand_real = os.path.realpath(cand_path)
+        if not cand_real.startswith(previews_dir_real + "/"):
+            continue
+        mtime = os.path.getmtime(cand_path)
+        if now - mtime < 7 * 86400:
+            continue
+    except Exception:
+        continue
+
+    # Sidecar check: fail closed (retain if missing/corrupt)
+    sidecar_path = cand_path + ".meta"
+    if not os.path.isfile(sidecar_path) or os.path.islink(sidecar_path):
+        continue
+
+    try:
+        with open(sidecar_path, "r", encoding="utf-8") as sf:
+            sidecar_data = json.load(sf)
+    except Exception:
+        continue
+
+    if not isinstance(sidecar_data, dict):
+        continue
+
+    vp = sidecar_data.get("videoPath")
+    if not isinstance(vp, str) or not vp:
+        continue
+
+    try:
+        real_vp = os.path.realpath(vp)
+    except Exception:
+        real_vp = vp
+
+    cand_base = os.path.basename(cand_path)
+
+    is_referenced = (
+        vp in referenced_videos
+        or real_vp in referenced_videos
+        or cand_path in referenced_images
+        or cand_real in referenced_images
+        or cand_base in referenced_basenames
+    )
+
+    if not is_referenced:
+        try:
+            os.remove(cand_path)
+        except Exception:
+            pass
+        try:
+            if os.path.exists(sidecar_path):
+                os.remove(sidecar_path)
+        except Exception:
+            pass
+PY
+}
+cleanup_stale_previews 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# Accent selection
+# -----------------------------------------------------------------------------
+accent=""
+if [[ -n "$raw_accent" && "$raw_accent" =~ ^#[0-9a-fA-F]{6}$ ]]; then
+  accent=$(printf '%s' "$raw_accent" | tr '[:upper:]' '[:lower:]')
+else
+  script_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+  palette_file="$script_dir/../plugin/toast-accents.lua"
+
+  palette=()
+  if [[ -f "$palette_file" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && palette+=("$line")
+    done < <(sed 's/--.*$//' "$palette_file" | grep -oiE '#[0-9a-f]{6}' | tr '[:upper:]' '[:lower:]' | awk '!seen[$0]++')
+  fi
+
+  fallback_color=""
+  theme_colors="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current/theme/colors.toml"
+  if [[ ! -f "$theme_colors" ]]; then
+    theme_colors="$HOME/.local/state/omarchy/current/theme/colors.toml"
+  fi
+  if [[ -f "$theme_colors" ]]; then
+    c=$(grep -E '^(urgent|red)[[:space:]]*=' "$theme_colors" 2>/dev/null | head -n1 | grep -oiE '#[0-9a-f]{6}' | tr '[:upper:]' '[:lower:]' || true)
+    [[ -n "$c" ]] && fallback_color="$c"
+  fi
+  [[ -n "$fallback_color" ]] || fallback_color="#a55555"
+
+  if [[ ${#palette[@]} -eq 0 ]]; then
+    accent="$fallback_color"
+  elif [[ ${#palette[@]} -eq 1 ]]; then
+    accent="${palette[0]}"
+  else
+    last_accent_file="$LOOM_STATE_DIR/last-accent"
+    lock_file="$LOOM_STATE_DIR/last-accent.lock"
+
+    exec 9>>"$lock_file"
+    flock -x 9
+    last_accent=$(cat "$last_accent_file" 2>/dev/null || true)
+    candidates=()
+    for c in "${palette[@]}"; do
+      if [[ "$c" != "$last_accent" ]]; then
+        candidates+=("$c")
+      fi
+    done
+
+    if [[ ${#candidates[@]} -gt 0 ]]; then
+      idx=$((RANDOM % ${#candidates[@]}))
+      accent="${candidates[$idx]}"
+    else
+      accent="${palette[0]}"
+    fi
+    printf '%s\n' "$accent" > "$last_accent_file"
+    flock -u 9
+    exec 9>&-
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# D-Bus Notification dispatch via busctl
+# -----------------------------------------------------------------------------
+recording_metadata=$(jq -nc --arg vp "$video_path" --arg acc "$accent" \
+  '{"version":1,"videoPath":$vp,"accent":$acc}')
+exec_argv_json=$(jq -nc --arg vp "$video_path" '["mpv","--",$vp]')
+
+hints=(
+  urgency y 1
+  x-loom-recording s "$recording_metadata"
+  omarchy-exec-argv s "$exec_argv_json"
+)
+
+if [[ -n "$staged_preview" ]]; then
+  hints+=(image-path s "$staged_preview")
+fi
+
+hint_count=$((${#hints[@]} / 3))
+
+notify_cmd=(
+  busctl --user -- call
+  org.freedesktop.Notifications /org/freedesktop/Notifications
+  org.freedesktop.Notifications Notify susssasa{sv}i
+  "Loom" 0 "camera-video" "Screen recording saved" "Play local video"
+  0
+  "$hint_count" "${hints[@]}"
+  0
+)
+
+out=$("${notify_cmd[@]}")
+id="${out##* }"
+printf '%s\n' "$id"
