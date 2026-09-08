@@ -89,9 +89,10 @@ covers which rules are load-bearing.
 | | |
 |---|---|
 | `loom` | start — click a window/monitor or drag a region in the picker |
-| `loom` again | stop, process, save to `~/Videos/`, then show a preview toast |
+| `loom` again | stop, process, save to `~/Videos/`, then show a preview toast that stays until you act |
 | Click the toast preview | open the local file in mpv |
 | Click **Upload to Loom** below the preview | open Loom and reveal the selected video for upload |
+| Click the toast **×** | dismiss the toast without opening or uploading |
 | Click the red top-bar icon | open the recording panel — elapsed time, camera, mic and mic level |
 | Bar icon turns into a crossed-out mic | the mic being recorded is muted; the panel says so too |
 | Panel Pause/Resume or `SUPER ALT P` | pause / unpause; paused time is dropped from the file |

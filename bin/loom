@@ -37,7 +37,7 @@ if pgrep -f "$GSR" >/dev/null; then
     preview=$STATE_DIR/loom-preview-$(basename "${filename%.mp4}").png
     ffmpeg -y -v error -ss 0.1 -i "$filename" -frames:v 1 -q:v 2 "$preview" 2>/dev/null || preview=
     if ! omarchy-shell loom-toast show "$filename" "$preview" >/dev/null 2>&1; then
-      fallback=("Screen recording saved" "Click to open" -t 10000)
+      fallback=("Screen recording saved" "Click to open" -t 0)
       [[ -z $preview ]] || fallback+=(--image "$preview")
       fallback+=(--exec mpv -- "$filename")
       omarchy-notification-send "${fallback[@]}"

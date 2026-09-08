@@ -14,8 +14,6 @@ Item {
   property string filePath: ""
   property string previewPath: ""
   property bool opened: false
-  property bool hovered: false
-  property int remainingMs: 0
 
   readonly property string binDir: Quickshell.env("HOME") + "/.local/bin/"
   readonly property int defaultBarSize: Style.bar.sizeHorizontal
@@ -39,15 +37,12 @@ Item {
     if (previewPath && previewPath !== preview) removePreview(previewPath)
     filePath = path
     previewPath = preview
-    remainingMs = 15000
-    hovered = false
     opened = true
   }
 
   function close() {
     var preview = previewPath
     opened = false
-    hovered = false
     filePath = ""
     previewPath = ""
     removePreview(preview)
@@ -79,16 +74,6 @@ Item {
     }
 
     function ping(): string { return "ok" }
-  }
-
-  Timer {
-    interval: 100
-    repeat: true
-    running: root.opened && !root.hovered
-    onTriggered: {
-      root.remainingMs -= interval
-      if (root.remainingMs <= 0) root.close()
-    }
   }
 
   Variants {
@@ -156,10 +141,6 @@ Item {
         radius: Style.cornerRadius
         borderSpec: Border.surfaceSpec("notifications", "border", Color.notifications.border, Math.max(1, Style.space(2)))
         clip: true
-
-        HoverHandler {
-          onHoveredChanged: root.hovered = hovered
-        }
 
         ColumnLayout {
           id: content
