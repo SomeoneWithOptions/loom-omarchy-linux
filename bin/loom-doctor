@@ -116,7 +116,12 @@ fi
 head_ 'Audio input'
 if command -v pactl >/dev/null; then
   src=$(pactl get-default-source 2>/dev/null)
-  if [[ -z ${src:-} ]]; then
+  # Same test bin/loom applies: the name must resolve to a real source. With no default set,
+  # pactl echoes the "@DEFAULT_SOURCE@" placeholder, which is not a device and records nothing.
+  if [[ -n ${src:-} ]] && ! pactl -f json list sources 2>/dev/null |
+    jq -e --arg n "$src" 'any(.[]; .name == $n)' >/dev/null; then
+    note "default source \"$src\" is not a real capture device — Loom records screen-only"
+  elif [[ -z ${src:-} ]]; then
     note 'no default PipeWire/Pulse source — Loom records screen-only (not an error)'
   elif [[ $src == *.monitor ]]; then
     note "default source is a monitor ($src) — Loom records screen-only, never desktop audio"
