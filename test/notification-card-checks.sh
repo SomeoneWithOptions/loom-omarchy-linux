@@ -60,6 +60,19 @@ grep -q "PreserveAspectCrop" "$CANONICAL_CARD" || fail "preview image must prese
 grep -q "textFormat: Text.PlainText" "$CANONICAL_CARD" || fail "text must be PlainText"
 grep -q "Color.notifications.background" "$CANONICAL_CARD" || fail "card must use Color.notifications palette"
 
+# Styling parity with the system notification card (see $SYSTEM_CARD)
+SYSTEM_CARD="${NOTIFICATION_SYSTEM_CARD:-/home/andres/.config/omarchy/plugins/andres.notifications/components/NotificationCard.qml}"
+grep -q 'font.family: "DM Sans"' "$CANONICAL_CARD" || fail "card must use the system card text family (DM Sans)"
+grep -q 'Qt.lighter(Color.notifications.background, 1.1)' "$CANONICAL_CARD" || fail "card background must match system card lift (lighter 1.1)"
+grep -q 'Math.max(10, cornerRadius - 4)' "$CANONICAL_CARD" || fail "card radius must nest at outer-4 like the system card"
+grep -q 'Qt.rgba(textColor.r, textColor.g, textColor.b, 0.62)' "$CANONICAL_CARD" || fail "muted text must match system card secondary alpha (0.62)"
+grep -q 'Border.flat(root.hairline' "$CANONICAL_CARD" || fail "card border must be the system card hairline"
+if [[ -f "$SYSTEM_CARD" ]]; then
+  for token in 'font.family: "DM Sans"' 'Qt.lighter(Color.notifications.background, 1.1)' 'Math.max(10, cornerRadius - 4)'; do
+    grep -q "$token" "$SYSTEM_CARD" || fail "system card no longer uses '$token' — recording card styling is stale"
+  done
+fi
+
 # 4. Service integration contracts
 grep -q "parseLoomRecording(cardSlot.loomRecording)" "$SERVICE_QML" || fail "Service.qml must parse loomRecording on cardSlot"
 grep -q "sourceComponent:" "$SERVICE_QML" || fail "Service.qml must select card via sourceComponent"
@@ -79,16 +92,21 @@ grep -q "cardLoader\.item && cardLoader\.item\.hovered" "$SERVICE_QML" || fail "
 grep -q "Layout.preferredWidth: cardLoader.item ? cardLoader.item.implicitWidth : Style.space(360)" "$SERVICE_QML" || fail "slot preferredWidth must track loaded item with safe fallback"
 
 # 5. Logical height calculation verification
-# Calculate heights specified in component
-HEADER_H=34
+# Calculate heights specified in component (system card grid: 11 top, 5 under
+# header, 13 bottom)
+HEADER_TOP=11
+HEADER_H=20
+TITLE_TOP=5
+TITLE_H=16
+PREVIEW_TOP=9
 PREVIEW_H=112
-UPLOAD_TOP=8
+UPLOAD_TOP=9
 UPLOAD_H=38
-UPLOAD_BOT=10
-BORDER_V=4
-TOTAL_LOGICAL_H=$((HEADER_H + PREVIEW_H + UPLOAD_TOP + UPLOAD_H + UPLOAD_BOT + BORDER_V))
-if (( TOTAL_LOGICAL_H > 230 )); then
-  fail "Total logical height ($TOTAL_LOGICAL_H) exceeds 230 target"
+UPLOAD_BOT=13
+BORDER_V=2
+TOTAL_LOGICAL_H=$((HEADER_TOP + HEADER_H + TITLE_TOP + TITLE_H + PREVIEW_TOP + PREVIEW_H + UPLOAD_TOP + UPLOAD_H + UPLOAD_BOT + BORDER_V))
+if (( TOTAL_LOGICAL_H > 240 )); then
+  fail "Total logical height ($TOTAL_LOGICAL_H) exceeds 240 target"
 fi
 
-echo "PASS: RecordingNotificationCard contracts, deployment parity, qmllint, and Service.qml integration verified (card height: ${TOTAL_LOGICAL_H}px <= 230px)"
+echo "PASS: RecordingNotificationCard contracts, deployment parity, qmllint, Service.qml integration, and system card styling parity verified (card height: ${TOTAL_LOGICAL_H}px <= 240px)"

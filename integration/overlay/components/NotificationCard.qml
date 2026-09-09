@@ -1,6 +1,7 @@
-// Notification card. Pure presentational — no service, Notification, or
-// ListModel references. The popup container drives lifetime; the history
-// panel drives static rendering. Both use the same component.
+// Variant A — "macOS".
+// Apple Notification Center logic: small header (icon + UPPERCASE app + time),
+// title semibold, body muted regular. No big left icon slab. DM Sans.
+// Keeps outer black drawer untouched; inner radius nests at outer-4.
 
 import QtQuick
 import QtQuick.Layouts
@@ -17,39 +18,32 @@ BorderSurface {
   property string summary: ""
   property string body: ""
   property string image: ""
-  // Nerd Font glyph rendered in the icon slot when no real icon is set.
-  // Used by omarchy-notification-send so user-action toasts (`Silenced
-  // notifications` etc.) show their bell/lock/etc. glyph without leaking
-  // into the summary text.
   property string glyph: ""
-  // NotificationUrgency: Low=0, Normal=1, Critical=2 (upstream).
   property int urgency: 1
   property double timestamp: 0
   property int cornerRadius: 0
-
-  // System monospace font injected by the container.
   property string fontFamily: ""
 
   readonly property bool hovered: hoverTracker.hovered
 
   signal closeRequested()
   signal cardClicked()
-  // Prefer per-notification media/avatar data, then fall back to the app icon.
-  // The `check` flag avoids Qt's missing-texture placeholder for unknown names.
+
   readonly property string smallIconSource: image.length > 0 ? image : iconSource(appIcon)
   readonly property bool hasGlyph: glyph.length > 0
-  readonly property bool compactGlyph: NotificationLogic.shouldRenderCompactGlyph(glyph, smallIconSource, singleLineToast)
   readonly property bool hasSmallIcon: smallIconSource.length > 0
   readonly property bool summaryStartsWithGlyph: NotificationLogic.summaryStartsWithGlyph(summary)
   readonly property bool singleLineToast: sanitizedBody.length === 0
-  readonly property bool collapseRedundantIcon: singleLineToast && !hasGlyph && summaryStartsWithGlyph
   readonly property string sanitizedBody: sanitizeBody(body)
   readonly property string styledBody: NotificationLogic.styledBody(body, app, appIcon)
+  // Photo/file preview on the right; themed app icons stay in the header.
+  readonly property bool hasPhoto: image.length > 0
+  readonly property bool showHeaderIcon: !hasPhoto && (hasSmallIcon || hasGlyph)
 
-  readonly property color dimColor: Qt.darker(Color.notifications.text, 1.4)
-  readonly property color bodyColor: Color.notifications.text
-  readonly property color accentColor: urgency === 2 ? Color.urgent : (urgency === 0 ? dimColor : Color.notifications.countdown)
-  readonly property var cardBorderSpec: Border.surfaceSpec("notifications", "border", Color.notifications.border, Math.max(1, Style.space(2)))
+  readonly property color textColor: Color.notifications.text
+  readonly property color secondaryColor: Qt.rgba(textColor.r, textColor.g, textColor.b, 0.62)
+  readonly property color cardBg: Qt.lighter(Color.notifications.background, 1.1)
+  readonly property int innerRadius: Math.max(10, cornerRadius - 4)
 
   function sanitizeBody(s) {
     return NotificationLogic.sanitizeBody(s, app, appIcon)
@@ -63,13 +57,19 @@ BorderSurface {
     return Quickshell.iconPath(value, true)
   }
 
+  function displayApp() {
+    var a = String(app || "")
+    if (a === "notify-send") return "Script"
+    if (a === "omarchy-action") return "System"
+    if (a.length === 0) return "Notification"
+    return a
+  }
+
   implicitWidth: Style.space(360)
-  // Add vertical border insets so mainColumn (inset by border on top/left/right)
-  // doesn't push content under the bottom edge.
   implicitHeight: mainColumn.implicitHeight + borderTop + borderBottom
-  radius: cornerRadius
-  color: Color.notifications.background
-  borderSpec: cardBorderSpec
+  radius: innerRadius
+  color: cardBg
+  borderSpec: Border.flat(Qt.rgba(1, 1, 1, 0.09), Math.max(1, Math.round(Style.space(1))))
   clip: true
   antialiasing: true
   smooth: true
@@ -81,18 +81,13 @@ BorderSurface {
     cursorShape: Qt.PointingHandCursor
     acceptedButtons: Qt.LeftButton | Qt.RightButton
     onClicked: function(mouse) {
-      if (mouse.button === Qt.RightButton) {
-        root.closeRequested()
-      } else {
-        root.cardClicked()
-      }
+      if (mouse.button === Qt.RightButton) root.closeRequested()
+      else root.cardClicked()
     }
   }
 
   ColumnLayout {
     id: mainColumn
-    // Inset by the card border so the content doesn't paint over the card's
-    // outer border.
     anchors.top: parent.top
     anchors.left: parent.left
     anchors.right: parent.right
@@ -101,105 +96,153 @@ BorderSurface {
     anchors.rightMargin: root.borderRight
     spacing: 0
 
-    // Text content.
+    // Header: icon + APP + time. Hidden for bare System toasts with glyph prefix.
     RowLayout {
       Layout.fillWidth: true
-      Layout.leftMargin: Style.space(14)
+      Layout.leftMargin: Style.space(16)
       Layout.rightMargin: Style.space(14)
-      Layout.topMargin: root.singleLineToast ? Style.space(8) : Style.space(11)
-      Layout.bottomMargin: root.singleLineToast ? Style.space(8) : Style.space(11)
-      spacing: root.collapseRedundantIcon ? 0 : (root.compactGlyph ? Style.space(8) : Style.space(12))
+      Layout.topMargin: Style.space(11)
+      spacing: Style.space(6)
+      visible: !(root.app === "omarchy-action" && root.summaryStartsWithGlyph)
 
       Item {
-        id: smallIconSlot
-        Layout.preferredWidth: visible ? Style.space(40) : 0
-        Layout.preferredHeight: visible ? Style.space(40) : 0
-        Layout.alignment: Qt.AlignVCenter
-        // Hide the slot when the icon failed to resolve (themed-icon name
-        // not in the user's icon theme) AND we don't have a glyph fallback
-        // — prevents rendering Qt's pink broken-image placeholder.
-        visible: !root.collapseRedundantIcon && !root.compactGlyph && (root.hasSmallIcon || root.hasGlyph) && (root.hasGlyph || smallIconImage.status !== Image.Error)
+        Layout.preferredWidth: Style.space(18)
+        Layout.preferredHeight: Style.space(18)
+        visible: root.showHeaderIcon && headerImg.status !== Image.Error
 
         Image {
-          id: smallIconImage
+          id: headerImg
           anchors.fill: parent
           source: root.smallIconSource
-          sourceSize.width: Math.round(smallIconSlot.width * Screen.devicePixelRatio)
-          sourceSize.height: Math.round(smallIconSlot.height * Screen.devicePixelRatio)
+          sourceSize.width: Math.round(width * Screen.devicePixelRatio)
+          sourceSize.height: Math.round(height * Screen.devicePixelRatio)
           fillMode: Image.PreserveAspectFit
           asynchronous: true
           smooth: true
           mipmap: true
-          visible: !root.hasGlyph || smallIconImage.status === Image.Ready
+          visible: !root.hasGlyph || status === Image.Ready
         }
-
-        // Glyph fallback (Nerd Font character) when no image icon is
-        // available. Used by omarchy-notification-send's `-g` flag.
         Text {
-          textFormat: Text.PlainText
           anchors.centerIn: parent
-          visible: root.hasGlyph && smallIconImage.status !== Image.Ready
+          visible: root.hasGlyph && headerImg.status !== Image.Ready
           text: root.glyph
-          color: Color.notifications.text
+          textFormat: Text.PlainText
+          color: root.secondaryColor
           font.family: root.fontFamily
-          font.pixelSize: Style.font.displayLarge
+          font.pixelSize: Style.font.body
           renderType: Text.NativeRendering
         }
       }
 
       Text {
+        Layout.fillWidth: true
+        text: root.displayApp().toUpperCase()
         textFormat: Text.PlainText
-        Layout.alignment: Qt.AlignVCenter
-        visible: root.compactGlyph
-        text: root.glyph
-        color: Color.notifications.text
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.icon
+        color: root.secondaryColor
+        font.family: "DM Sans"
+        font.pixelSize: Style.font.caption
+        font.weight: Font.Medium
+        font.letterSpacing: 0.8
+        elide: Text.ElideRight
         renderType: Text.NativeRendering
       }
+
+      // Hover close affordance. Space always reserved — opacity only,
+      // so hover never shifts layout.
+      Item {
+        Layout.preferredWidth: Style.space(20)
+        Layout.preferredHeight: Style.space(20)
+        opacity: root.hovered ? 1 : 0
+        Text {
+          anchors.centerIn: parent
+          text: "×"
+          textFormat: Text.PlainText
+          color: closeMouse.containsMouse ? root.textColor : root.secondaryColor
+          font.family: "DM Sans"
+          font.pixelSize: Style.font.subtitle
+          renderType: Text.NativeRendering
+        }
+        MouseArea {
+          id: closeMouse
+          anchors.fill: parent
+          anchors.margins: -Style.space(4)
+          hoverEnabled: true
+          enabled: root.hovered
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.closeRequested()
+        }
+      }
+    }
+
+    RowLayout {
+      Layout.fillWidth: true
+      Layout.leftMargin: Style.space(16)
+      Layout.rightMargin: Style.space(16)
+      Layout.topMargin: Style.space(5)
+      Layout.bottomMargin: Style.space(13)
+      spacing: Style.space(12)
 
       ColumnLayout {
         Layout.fillWidth: true
         Layout.alignment: Qt.AlignVCenter
-        spacing: Style.space(2)
+        spacing: Style.space(3)
 
         Text {
-          // The spec defines the summary as a single line of plain text, so
-          // AutoText could only ever promote a hostile string to rich text.
-          // The body below is StyledText on purpose — see Service.qml's
-          // bodyMarkupSupported — and is stripped in NotificationLogic.
-          textFormat: Text.PlainText
           Layout.fillWidth: true
           visible: root.summary.length > 0
           text: root.summary
-          font.family: "Noto Sans"
-          color: Color.notifications.text
-          font.pixelSize: Style.font.title
+          textFormat: Text.PlainText
+          color: root.textColor
+          font.family: "DM Sans"
+          font.pixelSize: Style.font.subtitle
           font.weight: Font.DemiBold
           wrapMode: Text.WordWrap
           elide: Text.ElideRight
           maximumLineCount: 2
-          lineHeight: 1.15
+          lineHeight: 1.2
           renderType: Text.NativeRendering
         }
 
         Text {
           Layout.fillWidth: true
-          Layout.topMargin: Style.space(1)
           visible: root.sanitizedBody.length > 0
           text: root.styledBody
           textFormat: Text.StyledText
-          font.family: "Noto Sans"
-          color: root.bodyColor
+          color: root.secondaryColor
+          font.family: "DM Sans"
           font.pixelSize: Style.font.body
-          lineHeight: 1.28
+          lineHeight: 1.35
           wrapMode: Text.WordWrap
           elide: Text.ElideRight
-          maximumLineCount: 3
+          maximumLineCount: 4
           renderType: Text.NativeRendering
+        }
+      }
+
+      // Photo preview (screenshots, avatars) — rounded, right side.
+      Item {
+        Layout.preferredWidth: Style.space(56)
+        Layout.preferredHeight: Style.space(56)
+        Layout.alignment: Qt.AlignVCenter
+        visible: root.hasPhoto && previewImg.status !== Image.Error
+        Rectangle {
+          anchors.fill: parent
+          radius: Style.space(10)
+          color: Qt.rgba(1, 1, 1, 0.05)
+          Image {
+            id: previewImg
+            anchors.fill: parent
+            anchors.margins: 1
+            source: root.image
+            sourceSize.width: Math.round(width * Screen.devicePixelRatio)
+            sourceSize.height: Math.round(height * Screen.devicePixelRatio)
+            fillMode: Image.PreserveAspectCrop
+            asynchronous: true
+            smooth: true
+            mipmap: true
+          }
         }
       }
     }
   }
-
 }
