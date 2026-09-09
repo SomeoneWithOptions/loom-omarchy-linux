@@ -106,11 +106,38 @@ covers which rules are load-bearing.
 | `SUPER` + right-drag | resize it, live, while recording — stays a circle |
 | `loom /dev/video2` | pick a different camera, once |
 | `LOOM_CAM=... loom` | pick a different camera, every time (export it from your shell profile) |
+| `loom doctor` | report why a recording cannot start — commands, output dir, DRM node, recorder capture options, mic, camera |
+| `loom doctor --record` | same, plus a ~2s real capture of the focused monitor (written to a temp file, then deleted) |
 
 The upload action stays on Loom's supported web flow: it opens the video library and selects the
 processed file in the file manager. Choose **New Video → Upload Video**, then drag the selected file
 into Loom. Loom has no public upload API, so the tool never stores browser cookies or Loom
 credentials and never uploads a recording without another explicit user action.
+
+### When a recording does not start
+
+The picker appears, then nothing happens: `gpu-screen-recorder` died on launch. Omarchy's wrapper
+exits 0 in that case and sends gsr's stderr to `/dev/null` unless `OMARCHY_SCREENRECORD_DEBUG=true`,
+so the terminal stayed empty and no toast appeared. Loom now sets that flag for its own launches,
+prints the recorder's stderr, and raises a critical toast; a cancelled picker is told apart from a
+dead recorder by whether the wrapper reached its log header (it writes one only after a capture
+target is picked), so cancelling stays quiet.
+
+```
+$ loom
+loom: gpu-screen-recorder exited immediately — no recording started.
+gsr error: Error: failed to find a vaapi encoder
+loom: run 'loom doctor' to check the recorder's prerequisites
+```
+
+`loom doctor` checks the prerequisites the recorder needs and the ones Loom's extras need, and
+distinguishes the two: a missing camera, mic or `mpv` is a note, not a failure — those degrade to a
+screen-only recording by design. Blocking problems are the recording directory (`omarchy-capture-screenrecording`
+exits before the picker when `~/Videos` is missing, notification only), a missing or unreadable
+`/dev/dri/renderD*`, and `gpu-screen-recorder --list-capture-options` failing or listing no monitor
+— which is what a VM without 3D acceleration looks like, since gsr's kms backend has no GPU to open
+and no hardware encoder to fall back from. `--record` runs the same flags Omarchy launches with, so
+a failure there is the failure the user hits.
 
 ### Native Notification Stack Integration
 
@@ -271,7 +298,7 @@ Paused time is **dropped** from the file, not frozen (gsr 6.0.0, measured: 3s + 
 ```bash
 ./test/status-checks.sh               # headless recorder-state, timer and mic-mute checks
 ./test/upload-checks.sh               # headless Loom handoff check
-./test/recording-checks.sh            # headless optional-camera/mic recording checks
+./test/recording-checks.sh            # headless optional-camera/mic recording and diagnostics checks
 node ./test/recording-panel-checks.js # headless Panel.qml contract checks
 ./test/checks.sh                      # live webcam/Hyprland checks
 ```
@@ -280,8 +307,9 @@ node ./test/recording-panel-checks.js # headless Panel.qml contract checks
 suite stubs every desktop/audio/camera command (`pactl`, `v4l2-ctl`, `mpv`, the recorder,
 `hyprctl`) in an isolated temp dir and asserts the camera-optional behaviour — screen-only
 recording with no camera or no usable mic, camera precedence (argument > `LOOM_CAM` > external
-colour node > internal), nonfatal overlay and explicit-camera failures, and the post-launch mic
-snapshot; the node suite extracts the panel's state functions and evaluates them in a `vm`, so
+colour node > internal), nonfatal overlay and explicit-camera failures, the post-launch mic
+snapshot, and the failed-start diagnostics (recorder stderr surfaced and toasted, cancelled picker
+kept quiet); the node suite extracts the panel's state functions and evaluates them in a `vm`, so
 it verifies the JS contracts, not live QML rendering or the bar process. Only `test/checks.sh`
 drives a real webcam and the running Hyprland.
 

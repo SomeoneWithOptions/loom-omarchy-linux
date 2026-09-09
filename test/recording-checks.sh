@@ -23,6 +23,8 @@ nomap_mpv=$tmp/nomap-mpv
 fail_ffmpeg=$tmp/fail-ffmpeg
 fail_pactl_list=$tmp/fail-pactl-list
 capture_hook=$tmp/capture.hook
+recorder_log=$tmp/recorder.log
+log_recorder_error=$tmp/log-recorder-error
 cleanup() {
   [[ -f $gsr_pid_file ]] && kill "$(cat "$gsr_pid_file")" 2>/dev/null || true
   [[ -f $mpv_pid_file ]] && kill "$(cat "$mpv_pid_file")" 2>/dev/null || true
@@ -104,7 +106,14 @@ if [[ -f $MOCK_GSR_PID ]]; then
   fi
   rm -f "$MOCK_GSR_PID"
 fi
-[[ -f $MOCK_RECORDER_FAIL ]] && exit 1
+if [[ -f $MOCK_RECORDER_FAIL ]]; then
+  # Omarchy's debug log shape: a "=====" header once a target is picked, then gsr's own stderr.
+  if [[ -f $MOCK_LOG_RECORDER_ERROR ]]; then
+    printf '===== 2026-01-01 00:00:00 args: target: monitor:MOCK =====\n' >>"$LOOM_RECORDER_LOG"
+    printf 'gsr error: no supported encoder found\n' >>"$LOOM_RECORDER_LOG"
+  fi
+  exit 1
+fi
 bash -c 'trap : USR2; while :; do sleep 0.2; done' &
 printf '%s\n' "$!" >"$MOCK_GSR_PID"
 if [[ -x ${MOCK_CAPTURE_HOOK:-} ]]; then
@@ -230,6 +239,9 @@ export MOCK_MPV_NOMAP=$nomap_mpv
 export MOCK_FFMPEG_FAIL=$fail_ffmpeg
 export MOCK_PACTL_LIST_FAIL=$fail_pactl_list
 export MOCK_CAPTURE_HOOK=$capture_hook
+export MOCK_LOG_RECORDER_ERROR=$log_recorder_error
+# Never read or append to the shared /tmp/omarchy-screenrecord.log.
+export LOOM_RECORDER_LOG=$recorder_log
 # Isolation: do not inherit a real camera override.
 unset LOOM_CAM || true
 
@@ -249,7 +261,7 @@ reset() {
   rm -f "$gsr_pid_file" "$mpv_pid_file" "$mapped_file" "$log" "$mask" \
     "$v4l_map" "$default_source" "$sources_json" "$muted_flag" \
     "$fail_recorder" "$fail_mpv" "$nomap_mpv" "$fail_ffmpeg" \
-    "$fail_pactl_list" "$capture_hook" \
+    "$fail_pactl_list" "$capture_hook" "$recorder_log" "$log_recorder_error" \
     "$mock/loom-cam" "$tmp/vdev"/video*
   rm -f "$state"/loom-*
   : >"$log"
@@ -589,5 +601,41 @@ logged 'capture --with-microphone-audio' || fail "pre-picker mic should still re
 [[ $(field 3) == unknown ]] || fail "post-launch miss should be unknown, got $(status)"
 running "$gsr_pid_file" || fail "post-launch lookup failure killed the recorder"
 echo "PASS: post-launch lookup failure omits stale mic metadata"
+
+# --- a recorder that dies on launch reports gsr's stderr ------------------------------------
+reset
+write_mic
+touch "$fail_recorder" "$log_recorder_error"
+ec=0
+err=$(run_loom 2>&1 >/dev/null) || ec=$?
+[[ $ec -ne 0 ]] || fail "dead recorder should be nonzero"
+[[ $err == *"no supported encoder found"* ]] || fail "gsr stderr not surfaced, got: $err"
+[[ $err == *"exited immediately"* ]] || fail "dead recorder not named as such, got: $err"
+[[ $err == *"loom doctor"* ]] || fail "no pointer to loom doctor, got: $err"
+logged 'notify .*-u critical.*recording failed to start' ||
+  fail "dead recorder sent no critical notification"
+[[ ! -e $state/loom-recording.pid ]] || fail "dead recorder published PID"
+echo "PASS: recorder that dies on launch prints its stderr"
+
+# --- a cancelled picker stays quiet ---------------------------------------------------------
+reset
+write_mic
+touch "$fail_recorder" # no log activity: cancel happens before Omarchy's header line
+ec=0
+err=$(run_loom 2>&1 >/dev/null) || ec=$?
+[[ $ec -ne 0 ]] || fail "cancelled picker should be nonzero"
+[[ $err == *"picker cancelled"* ]] || fail "cancel not reported, got: $err"
+[[ $err != *"exited immediately"* ]] || fail "cancel misreported as recorder failure"
+! logged 'notify .*-u critical' || fail "cancel raised a critical notification"
+echo "PASS: cancelled picker is reported without an error toast"
+
+# --- debug logging is enabled for our launches ----------------------------------------------
+reset
+write_mic
+run_loom
+logged 'capture' || fail "recorder not launched"
+[[ $(cat "$state/loom-recording.pid" 2>/dev/null) == "$(cat "$gsr_pid_file")" ]] ||
+  fail "PID not published"
+echo "PASS: normal start unaffected by diagnostics"
 
 echo "PASS: optional camera/mic recording checks"

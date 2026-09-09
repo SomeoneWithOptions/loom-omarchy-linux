@@ -1,0 +1,187 @@
+#!/bin/bash
+# loom doctor — report why a recording cannot start. Read-only by default.
+#
+# The failure this exists for: the screen picker appears, gsr dies on launch, and the terminal
+# stays empty (Omarchy sends gsr's stderr to /dev/null unless OMARCHY_SCREENRECORD_DEBUG=true).
+# Common on VMs and headless GPUs, where there is no hardware encoder to open.
+#
+#   --record   also run a ~2s real capture of the focused monitor to a temp file, then delete it.
+#              The only check that exercises the whole encode path.
+set -u
+
+RECORDER_LOG=${LOOM_RECORDER_LOG:-/tmp/omarchy-screenrecord.log}
+
+do_record=0
+for arg in "$@"; do
+  case $arg in
+  --record) do_record=1 ;;
+  -h | --help)
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+    exit 0
+    ;;
+  *)
+    printf 'loom doctor: unknown argument: %s\n' "$arg" >&2
+    exit 2
+    ;;
+  esac
+done
+
+problems=0
+ok() { printf '  \033[32mok\033[0m    %s\n' "$*"; }
+bad() {
+  problems=$((problems + 1))
+  printf '  \033[31mFAIL\033[0m  %s\n' "$*"
+}
+note() { printf '  \033[33mnote\033[0m  %s\n' "$*"; }
+head_() { printf '\n%s\n' "$*"; }
+
+# Indent multi-line command output so it reads as belonging to the check above it.
+quote() { sed 's/^/        /' ; }
+
+need() { # command, why it is needed
+  if command -v "$1" >/dev/null; then
+    ok "$1"
+  else
+    bad "$1 is missing — $2"
+  fi
+}
+
+head_ 'Commands'
+need gpu-screen-recorder 'the recorder itself (pacman -S gpu-screen-recorder)'
+need omarchy-capture-screenrecording 'Omarchy recording wrapper; is this an Omarchy install?'
+need hyprctl 'Loom needs Hyprland for the pause bind and the overlay'
+need jq 'used to read monitors, clients and audio sources'
+need slurp 'the region picker'
+need ffmpeg 'preview frame and the camera mask'
+command -v ffprobe >/dev/null && ok ffprobe || note 'ffprobe missing — Omarchy skips post-processing'
+command -v pactl >/dev/null && ok pactl || note 'pactl missing — recordings will be screen-only'
+command -v v4l2-ctl >/dev/null && ok v4l2-ctl || note 'v4l2-ctl missing (v4l-utils) — no camera overlay'
+command -v mpv >/dev/null && ok mpv || note 'mpv missing — no camera overlay, no preview playback'
+
+head_ 'Output directory'
+# Same resolution order as omarchy-capture-screenrecording: a missing directory makes it exit
+# before the picker, notification only, nothing on the terminal.
+# shellcheck source=/dev/null
+[[ -f $HOME/.config/user-dirs.dirs ]] && source "$HOME/.config/user-dirs.dirs"
+out_dir=${OMARCHY_SCREENRECORD_DIR:-${XDG_VIDEOS_DIR:-$HOME/Videos}}
+if [[ ! -d $out_dir ]]; then
+  bad "$out_dir does not exist — create it (mkdir -p \"$out_dir\") or set OMARCHY_SCREENRECORD_DIR"
+elif [[ ! -w $out_dir ]]; then
+  bad "$out_dir is not writable"
+else
+  ok "$out_dir"
+fi
+
+head_ 'Graphics'
+if [[ -e /dev/dri ]]; then
+  nodes=$(ls /dev/dri 2>/dev/null | tr '\n' ' ')
+  ok "/dev/dri: ${nodes:-empty}"
+  render=$(ls /dev/dri/renderD* 2>/dev/null | head -n1)
+  if [[ -z ${render:-} ]]; then
+    bad 'no /dev/dri/renderD* render node — gsr has no GPU to open (typical on a VM without 3D acceleration)'
+  elif [[ ! -r $render || ! -w $render ]]; then
+    bad "$render is not readable/writable by $USER — add yourself to the 'render' group"
+  else
+    ok "$render accessible"
+  fi
+else
+  bad 'no /dev/dri at all — no DRM device, gsr cannot capture'
+fi
+
+head_ 'Recorder capture options'
+if command -v gpu-screen-recorder >/dev/null; then
+  # gsr's own enumeration: it opens the DRM device and the encoder the same way a real start does,
+  # so a VM with no encoder fails here instead of silently at launch. Never blocks: some failures
+  # hang on device probing.
+  caps=$(timeout 15 gpu-screen-recorder --list-capture-options 2>&1)
+  rc=$?
+  if ((rc == 124)); then
+    bad 'gpu-screen-recorder --list-capture-options timed out after 15s (device probe is hanging)'
+  elif ((rc != 0)); then
+    bad "gpu-screen-recorder --list-capture-options failed (exit $rc):"
+    printf '%s\n' "$caps" | quote
+  else
+    monitors=$(printf '%s\n' "$caps" | grep -v -e '^region$' -e '^portal$' -e '^/dev/video' | grep '|')
+    if [[ -z ${monitors:-} ]]; then
+      bad 'gsr found no monitor to capture:'
+      printf '%s\n' "$caps" | quote
+    else
+      ok "capturable monitors: $(printf '%s' "$monitors" | tr '\n' ' ')"
+    fi
+  fi
+else
+  bad 'gpu-screen-recorder is not installed, skipping capture probe'
+fi
+
+head_ 'Audio input'
+if command -v pactl >/dev/null; then
+  src=$(pactl get-default-source 2>/dev/null)
+  if [[ -z ${src:-} ]]; then
+    note 'no default PipeWire/Pulse source — Loom records screen-only (not an error)'
+  elif [[ $src == *.monitor ]]; then
+    note "default source is a monitor ($src) — Loom records screen-only, never desktop audio"
+  else
+    ok "default source: $src"
+    [[ $(pactl get-source-mute "$src" 2>/dev/null) == *yes ]] &&
+      note "$src is MUTED — this recording would have no voice"
+  fi
+fi
+
+head_ 'Camera'
+cams=$(ls /dev/video* 2>/dev/null)
+if [[ -z ${cams:-} ]]; then
+  note 'no /dev/video* device — no camera overlay (not an error; the recording still runs)'
+elif ! command -v v4l2-ctl >/dev/null; then
+  note 'cameras present but v4l2-ctl is missing, cannot check formats'
+else
+  found=
+  for d in $cams; do
+    fmt=$(v4l2-ctl -d "$d" --list-formats 2>/dev/null)
+    [[ $fmt == *MJPG* || $fmt == *YUYV* ]] || continue
+    found=1
+    ok "$d — $(v4l2-ctl -d "$d" --info 2>/dev/null | awk -F' *: *' '/Card type/{print $2; exit}')"
+  done
+  [[ -n ${found:-} ]] || note 'no /dev/video* node offers MJPG or YUYV — no camera overlay'
+fi
+
+if ((do_record)); then
+  head_ 'Live capture test (~2s)'
+  if ! command -v gpu-screen-recorder >/dev/null || ! command -v hyprctl >/dev/null; then
+    bad 'need gpu-screen-recorder and hyprctl for the capture test'
+  else
+    mon=$(hyprctl monitors -j 2>/dev/null | jq -r '.[] | select(.focused == true) | .name')
+    test_out=$(mktemp -u "${XDG_RUNTIME_DIR:-/tmp}/loom-doctor-XXXXXX.mp4")
+    if [[ -z ${mon:-} || $mon == null ]]; then
+      bad 'no focused monitor reported by hyprctl'
+    else
+      # Same flags Omarchy launches with, so a failure here is the failure the user hits.
+      err=$(gpu-screen-recorder -w "$mon" -k auto -f 60 -fm cfr -fallback-cpu-encoding yes \
+        -o "$test_out" 2>&1 &
+      gsr=$!
+      sleep 2
+      kill -INT "$gsr" 2>/dev/null
+      wait "$gsr" 2>/dev/null)
+      if [[ -s $test_out ]]; then
+        ok "recorded $(stat -c %s "$test_out") bytes from $mon"
+      else
+        bad "capture on $mon produced no file — gsr said:"
+        printf '%s\n' "${err:-(nothing on stderr)}" | quote
+      fi
+      rm -f "$test_out"
+    fi
+  fi
+fi
+
+if [[ -s $RECORDER_LOG ]]; then
+  head_ "Last recorder log ($RECORDER_LOG)"
+  tail -n 15 "$RECORDER_LOG" | quote
+fi
+
+printf '\n'
+if ((problems)); then
+  printf 'loom doctor: %d problem(s) found.\n' "$problems"
+  exit 1
+fi
+printf 'loom doctor: no blocking problems found.\n'
+printf 'If a recording still fails, run: loom doctor --record\n'
+exit 0

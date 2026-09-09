@@ -13,6 +13,21 @@ STARTED=$STATE_DIR/loom-started       # monotonic start, for the panel's timer
 PAUSED_TOTAL=$STATE_DIR/loom-paused-total
 PAUSE_KEY='SUPER + ALT + P'
 BIN=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")") # ~/.local/bin is a symlink into the repo
+# Omarchy discards gpu-screen-recorder's stderr unless its debug flag is set, and that stderr is
+# the only account of why a start failed — without it a recorder that dies on launch (no encoder
+# in a VM, no DRM node, unsupported codec) leaves an empty terminal and no notification. Turn it
+# on for our launches; an explicit OMARCHY_SCREENRECORD_DEBUG=false still wins.
+RECORDER_LOG=${LOOM_RECORDER_LOG:-/tmp/omarchy-screenrecord.log}
+export OMARCHY_SCREENRECORD_DEBUG=${OMARCHY_SCREENRECORD_DEBUG:-true}
+
+warn() { printf 'loom: %s\n' "$*" >&2; }
+
+case ${1:-} in
+doctor | --check) # prerequisites report; args pass through (e.g. --record)
+  shift
+  exec "$BIN/loom-doctor" "$@"
+  ;;
+esac
 
 # The pause key only means anything while recording, so it's bound for exactly that long, at
 # runtime, rather than written into ~/.config/hypr/bindings.lua — which an omarchy update or a
@@ -105,12 +120,45 @@ fi
 # Recorder FIRST: it returns once gsr is up, so nothing extra is in the slurp picker.
 # gsr running is the signal, not the exit code: a cancelled picker and a failed start both come
 # back non-zero, and the exit code says nothing about whether an overlay would be orphaned.
+#
+# Everything Omarchy appends for this launch starts past this offset. Its "===== ... =====" header
+# is written only after a capture target is picked, so new bytes with no header at all means the
+# picker was cancelled — not a broken recorder.
+log_mark=0
+[[ ! -f $RECORDER_LOG ]] || log_mark=$(stat -c %s "$RECORDER_LOG" 2>/dev/null || echo 0)
+
+recorder_log_new() { tail -c "+$((log_mark + 1))" "$RECORDER_LOG" 2>/dev/null; }
+recorder_launched() { recorder_log_new | grep -q '^===== '; }
+recorder_error() { recorder_log_new | grep -v -e '^===== ' -e '^[[:space:]]*$'; }
+
 if [[ $have_mic -eq 1 ]]; then
   omarchy-capture-screenrecording --with-microphone-audio
 else
   omarchy-capture-screenrecording
 fi
-pid=$(pgrep -o -f "$GSR") || exit 1 # picker cancelled -> no overlay, no published state
+
+# gsr running is the signal, and Omarchy exits 0 even when the recorder died on launch, so this is
+# also the only place a failed start can be reported. Say which of the two it was: a cancelled
+# picker is routine, a dead recorder needs its stderr in front of the user.
+if ! pid=$(pgrep -o -f "$GSR"); then # no overlay, no published state
+  if recorder_launched; then
+    detail=$(recorder_error)
+    warn 'gpu-screen-recorder exited immediately — no recording started.'
+    if [[ -n $detail ]]; then
+      printf '%s\n' "$detail" >&2
+    else
+      warn "the recorder logged no error; full log: $RECORDER_LOG"
+    fi
+    warn "run 'loom doctor' to check the recorder's prerequisites"
+    # The last stderr line is usually gsr's own reason; the toast is often all a hotkey user sees.
+    body=$(printf '%s' "$detail" | tail -n 1)
+    omarchy-notification-send -u critical -t 8000 'Loom: recording failed to start' \
+      "${body:-Run \"loom doctor\" in a terminal for details.}" || true
+  else
+    warn 'no recording started (screen picker cancelled)'
+  fi
+  exit 1
+fi
 printf '%s\n' "$pid" >"$ACTIVE"       # lets the bar distinguish Loom from other recordings
 
 # Timer baseline, published after the PID so a loom-status poll landing in between can't sweep it

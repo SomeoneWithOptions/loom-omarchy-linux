@@ -69,7 +69,7 @@ fi
 
 # Remove command links only when targets belong to Loom tree. Broken links into managed install
 # directory are safe to remove too. Regular files and unrelated symlinks stay untouched.
-for name in loom loom-cam loom-mic-level loom-pause loom-status loom-upload loom-notify; do
+for name in loom loom-cam loom-doctor loom-mic-level loom-pause loom-status loom-upload loom-notify; do
   path=$HOME/.local/bin/$name
   [[ -L $path ]] || continue
   raw_target=$(readlink "$path")
