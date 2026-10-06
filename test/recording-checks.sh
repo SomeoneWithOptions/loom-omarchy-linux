@@ -23,7 +23,7 @@ nomap_mpv=$tmp/nomap-mpv
 fail_ffmpeg=$tmp/fail-ffmpeg
 fail_pactl_list=$tmp/fail-pactl-list
 capture_hook=$tmp/capture.hook
-recorder_log=$tmp/recorder.log
+recorder_log=$state/omarchy-screenrecord.log
 log_recorder_error=$tmp/log-recorder-error
 cleanup() {
   [[ -f $gsr_pid_file ]] && kill "$(cat "$gsr_pid_file")" 2>/dev/null || true
@@ -109,8 +109,8 @@ fi
 if [[ -f $MOCK_RECORDER_FAIL ]]; then
   # Omarchy's debug log shape: a "=====" header once a target is picked, then gsr's own stderr.
   if [[ -f $MOCK_LOG_RECORDER_ERROR ]]; then
-    printf '===== 2026-01-01 00:00:00 args: target: monitor:MOCK =====\n' >>"$LOOM_RECORDER_LOG"
-    printf 'gsr error: no supported encoder found\n' >>"$LOOM_RECORDER_LOG"
+    printf '===== 2026-01-01 00:00:00 args: target: monitor:MOCK =====\n' >>"$MOCK_RECORDER_LOG"
+    printf 'gsr error: no supported encoder found\n' >>"$MOCK_RECORDER_LOG"
   fi
   exit 1
 fi
@@ -240,8 +240,9 @@ export MOCK_FFMPEG_FAIL=$fail_ffmpeg
 export MOCK_PACTL_LIST_FAIL=$fail_pactl_list
 export MOCK_CAPTURE_HOOK=$capture_hook
 export MOCK_LOG_RECORDER_ERROR=$log_recorder_error
-# Never read or append to the shared /tmp/omarchy-screenrecord.log.
-export LOOM_RECORDER_LOG=$recorder_log
+# Exercise Omarchy's default runtime log path, isolated from host state.
+export MOCK_RECORDER_LOG=$recorder_log
+unset LOOM_RECORDER_LOG || true
 # Isolation: do not inherit a real camera override.
 unset LOOM_CAM || true
 

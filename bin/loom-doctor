@@ -9,7 +9,8 @@
 #              The only check that exercises the whole encode path.
 set -u
 
-RECORDER_LOG=${LOOM_RECORDER_LOG:-/tmp/omarchy-screenrecord.log}
+RECORDER_STATE_DIR=${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy}
+RECORDER_LOG=${LOOM_RECORDER_LOG:-$RECORDER_STATE_DIR/omarchy-screenrecord.log}
 
 do_record=0
 for arg in "$@"; do

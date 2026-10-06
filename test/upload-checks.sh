@@ -637,6 +637,7 @@ SH
 cat >"$loom_test_dir/bin/omarchy-capture-screenrecording" <<SH
 #!/bin/bash
 touch "\$STATE_DIR/loom-recording-saved"
+rm -f "\${XDG_RUNTIME_DIR:-\${XDG_STATE_HOME:-\$HOME/.local/state}/omarchy}/omarchy-screenrecord-filename"
 exit 0
 SH
 
@@ -677,7 +678,7 @@ fake_rec="$loom_test_dir/recorded_screen.mp4"
 touch "$fake_rec"
 
 # Case A: Helper succeeds -> primary path sends exactly one notification, cleans up ffmpeg preview
-echo "$fake_rec" > /tmp/omarchy-screenrecord-filename
+echo "$fake_rec" > "$loom_test_dir/state/omarchy-screenrecord-filename"
 rm -f "$loom_calls"
 export STATE_DIR="$loom_test_dir/state"
 
@@ -705,7 +706,7 @@ fi
 }
 
 # Case B: Helper fails -> fallback omarchy-notification-send is invoked synchronously
-echo "$fake_rec" > /tmp/omarchy-screenrecord-filename
+echo "$fake_rec" > "$loom_test_dir/state/omarchy-screenrecord-filename"
 rm -f "$loom_calls"
 
 stop_out2=$(PATH="$loom_test_dir/bin:$PATH" XDG_RUNTIME_DIR="$loom_test_dir/state" \
@@ -726,7 +727,25 @@ grep -qF "$expected_fallback" "$loom_calls" || {
   exit 1
 }
 
-# Case C: Starting new recording does not invoke loom-toast close and does not wipe recent previews
+# Case C: Omarchy's state-directory fallback without XDG_RUNTIME_DIR.
+mkdir -p "$loom_test_dir/xdg-state/omarchy"
+fallback_rec="$loom_test_dir/fallback-$(basename "$loom_test_dir").mp4"
+touch "$fallback_rec"
+echo "$fallback_rec" > "$loom_test_dir/xdg-state/omarchy/omarchy-screenrecord-filename"
+rm -f "$loom_calls"
+stop_out3=$(PATH="$loom_test_dir/bin:$PATH" XDG_RUNTIME_DIR="" \
+  XDG_STATE_HOME="$loom_test_dir/xdg-state" \
+  LOOM_NOTIFY_BIN="$loom_test_dir/bin/mock-helper-success" "$repo/bin/loom")
+[[ "$stop_out3" == "$fallback_rec" ]] || {
+  echo "FAIL: bin/loom missed recording in XDG state fallback"
+  exit 1
+}
+grep -q "helper-notify: $fallback_rec " "$loom_calls" || {
+  echo "FAIL: bin/loom did not send recording from XDG state fallback"
+  exit 1
+}
+
+# Case D: Starting new recording does not invoke loom-toast close and does not wipe recent previews
 cat >"$loom_test_dir/bin/pgrep" <<'SH'
 #!/bin/bash
 # Simulates recorder NOT running (starts recording)
@@ -761,8 +780,6 @@ fi
   echo "FAIL: bin/loom start blanket deleted recent preview"
   exit 1
 }
-
-rm -f /tmp/omarchy-screenrecord-filename
 
 echo "PASS: bin/loom stop sender dispatch, fallback, and non-duplicate delivery"
 echo "PASS: all upload and sender checks passed successfully"
