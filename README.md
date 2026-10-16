@@ -125,8 +125,9 @@ target is picked), so cancelling stays quiet.
 
 Loom reads Omarchy's recording filename and debug log from `$XDG_RUNTIME_DIR`
 (normally `/run/user/<uid>`), falling back to `${XDG_STATE_HOME:-$HOME/.local/state}/omarchy`
-without a session runtime directory. Omarchy moved these files out of `/tmp`; older Loom
-installs reading the old path suppress the saved toast without showing the upload card.
+without a session runtime directory. Omarchy moved these files out of `/tmp`; when the installed
+`omarchy-capture-screenrecording` still names `/tmp/omarchy-screenrecord*`, Loom reads `/tmp`
+instead. Reading the wrong path suppresses the saved toast without showing the upload card.
 
 ```
 $ loom
