@@ -47,7 +47,7 @@ for prop in "property string summary" "property string image" "property string r
 done
 
 # Check required public signals
-for sig in "signal playRequested()" "signal uploadRequested()" "signal closeRequested()"; do
+for sig in "signal playRequested()" "signal uploadRequested()" "signal deleteRequested()" "signal closeRequested()"; do
   if ! grep -q "$sig" "$CANONICAL_CARD"; then
     fail "RecordingNotificationCard missing required signal: $sig"
   fi
@@ -83,6 +83,7 @@ fi
 # Check delegation with current index
 grep -q 'invokeRecordingAction(cardSlot\.index,\s*"play")' "$SERVICE_QML" || fail "play signal must route to invokeRecordingAction with cardSlot.index"
 grep -q 'invokeRecordingAction(cardSlot\.index,\s*"upload")' "$SERVICE_QML" || fail "upload signal must route to invokeRecordingAction with cardSlot.index"
+grep -q 'invokeRecordingAction(cardSlot\.index,\s*"delete")' "$SERVICE_QML" || fail "delete signal must route to invokeRecordingAction with cardSlot.index"
 grep -q 'dismissPopup(cardSlot\.index)' "$SERVICE_QML" || fail "close signal must route to dismissPopup with cardSlot.index"
 
 # Check safe hover reading on loaded item

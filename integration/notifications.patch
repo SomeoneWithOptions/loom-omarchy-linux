@@ -256,12 +256,12 @@
    }
  
    function handleNotification(notification) {
-@@ -357,6 +350,44 @@
+@@ -357,6 +350,52 @@
      while (popupModel.count > 0) dismissPopup(0)
    }
  
 +  function invokeRecordingAction(index, action) {
-+    if (action !== "play" && action !== "upload") return
++    if (action !== "play" && action !== "upload" && action !== "delete") return
 +    if (index < 0 || index >= popupModel.count) return
 +    var entry = popupModel.get(index)
 +    var recording = NotificationLogic.parseLoomRecording(entry ? entry.loomRecording : "")
@@ -288,6 +288,14 @@
 +      "  exec mpv -- \"$video\"\n" +
 +      "elif [[ \"$action\" == \"upload\" ]]; then\n" +
 +      "  exec \"$upload_bin\" \"$video\"\n" +
++      "elif [[ \"$action\" == \"delete\" ]]; then\n" +
++      "  if ! rm -f -- \"$video\"; then\n" +
++      "    if command -v omarchy-notification-send >/dev/null 2>&1; then\n" +
++      "      omarchy-notification-send -u critical \"Delete failed\" \"Could not delete $video\"\n" +
++      "    elif command -v notify-send >/dev/null 2>&1; then\n" +
++      "      notify-send -u critical \"Delete failed\" \"Could not delete $video\"\n" +
++      "    fi\n" +
++      "  fi\n" +
 +      "fi\n"
 +
 +    Quickshell.execDetached([
@@ -301,7 +309,7 @@
    // Run the popup's click action, then dismiss. Omarchy's own toasts carry the
    // action as an argv vector in the `execArgv` role (see execArgvFromHints),
    // which the persistence files preserve, so restored toasts stay clickable.
-@@ -365,6 +396,10 @@
+@@ -365,6 +404,10 @@
    function invokePopupDefault(index) {
      if (index < 0 || index >= popupModel.count) return
      var entry = popupModel.get(index)
@@ -312,7 +320,7 @@
  
      // Run the argv (via Util.execArgv, no shell interpretation). Detached so it
      // outlives the shell, which installer toasts depend on: they restart it.
-@@ -672,6 +707,7 @@
+@@ -672,6 +715,7 @@
          image: row.image,
          glyph: row.glyph || "",
          execArgv: row.execArgv || "",
@@ -320,7 +328,7 @@
          urgency: row.urgency,
          timestamp: row.timestamp
        }, imagesDir).entry)
-@@ -696,6 +732,7 @@
+@@ -696,6 +740,7 @@
          image: "",
          glyph: "󰂚",
          execArgv: "",
@@ -328,7 +336,7 @@
          urgency: NotificationUrgency.Low,
          expireTimeout: 0,
          timestamp: Date.now()
-@@ -729,7 +766,7 @@
+@@ -729,7 +774,7 @@
      var live = []
      for (var i = 0; i < entries.length; i++) {
        var entry = entries[i]
@@ -337,7 +345,7 @@
        if (NotificationLogic.popupExpired(entry, duration, now)) {
          // It would have expired on screen had the shell kept running, so it
          // gets archived exactly like an expiry that happened while it did.
-@@ -1087,19 +1124,25 @@
+@@ -1087,19 +1132,25 @@
              required property string body
              required property string image
              required property string glyph
@@ -367,7 +375,7 @@
  
              // A client updating this notification in place rewrites the row
              // under the card (see refreshPopup). New text deserves a full look,
-@@ -1110,6 +1153,7 @@
+@@ -1110,6 +1161,7 @@
              onSummaryChanged: cardSlot.remainingLifetime = 1.0
              onBodyChanged: cardSlot.remainingLifetime = 1.0
              onImageChanged: cardSlot.remainingLifetime = 1.0
@@ -375,7 +383,7 @@
  
              Timer {
                interval: 50
-@@ -1125,22 +1169,50 @@
+@@ -1125,22 +1177,51 @@
                }
              }
  
@@ -428,6 +436,7 @@
 +
 +                onPlayRequested: service.invokeRecordingAction(cardSlot.index, "play")
 +                onUploadRequested: service.invokeRecordingAction(cardSlot.index, "upload")
++                onDeleteRequested: service.invokeRecordingAction(cardSlot.index, "delete")
 +                onCloseRequested: service.dismissPopup(cardSlot.index)
 +              }
 +            }

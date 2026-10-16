@@ -96,6 +96,7 @@ covers which rules are load-bearing.
 | `loom` again | stop, process, save to `~/Videos/`, then display a rich persistent recording card in the native notification stack |
 | Click the card preview | open the local file in mpv (the only left-click play target on the card) |
 | Click **Upload to Loom** below the preview | open Loom and reveal the selected video for upload |
+| Click red **Delete** beside (or under) Upload | delete the video file immediately, no confirmation, and dismiss the card |
 | Click the card **×** or right-click card | dismiss the card without opening or uploading |
 | `omarchy-shell notifications invokeLast` | trigger default play action in mpv for latest popup (no generic Enter or whole-card click) |
 | Click the red top-bar icon | open the recording panel — elapsed time, camera, mic and mic level |
@@ -153,10 +154,11 @@ Loom recordings integrate directly into Omarchy's native notification stack inst
 
 - **Stack Geometry & Coexistence**: The card renders within the native top-right notification column with standard width 360px (`Style.space(360)`), a 112px tall video thumbnail (`Style.space(112)`), and an overall card height of ~235px adhering to the user's 1px borders and theme radius. Multiple recordings can coexist simultaneously in chronological (newest-first) order alongside ordinary system notifications.
 - **Styling Parity**: The card tracks the system notification card it stacks with: DM Sans text, a small header (video glyph + `LOOM` in uppercase caption + hover-only close), semibold title, muted secondary text at 62% opacity, background lifted from the drawer (`Qt.lighter(Color.notifications.background, 1.1)`), a `rgba(255,255,255,0.09)` hairline border, and an inner radius nested at theme radius minus 4. `test/notification-card-checks.sh` fails if the system card drops those tokens, so a later restyle surfaces as a test failure instead of a mismatched card.
-- **Persistence & Expiry**: With the rich renderer installed, Loom cards are persistent (`popupDuration` returns 0; no auto-dismissal countdown timer), remaining visible until explicitly played, uploaded, or dismissed. For standard system notifications, low and normal urgency notifications auto-expire (5–30s based on urgency), while critical urgency notifications remain persistent.
+- **Persistence & Expiry**: With the rich renderer installed, Loom cards are persistent (`popupDuration` returns 0; no auto-dismissal countdown timer), remaining visible until explicitly played, uploaded, deleted, or dismissed. For standard system notifications, low and normal urgency notifications auto-expire (5–30s based on urgency), while critical urgency notifications remain persistent.
 - **Controls & Default Action**:
   - Click the large thumbnail: plays the local recording in `mpv` (the thumbnail preview is the only left-click target on the card that starts playback; clicking the card body does not trigger play).
   - Click the **Upload to Loom** accent button: initiates the web upload handoff.
+  - Click the red **Delete** button: removes the recording file at once (`rm`, not trash; no confirmation) and dismisses the card. Sits on the Upload row when both fit at natural width, otherwise wraps to its own row.
   - Click **×** (revealed on hover) or right-click the card: dismisses the notification.
   - Default activation IPC: `omarchy-shell notifications invokeLast` triggers the default play action in `mpv` for the active popup. There is no generic keyboard `Enter` listener or whole-row click handler.
 - **Do Not Disturb (DND)**: Respects Omarchy's DND toggle. During DND, notifications do not pop up on screen, but remain preserved in history and state.

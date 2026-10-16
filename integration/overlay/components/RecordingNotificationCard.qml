@@ -1,8 +1,8 @@
 // Rich Loom recording notification card. Pure presentational component.
 // Follows the system card's "macOS" logic: small header (glyph + UPPERCASE
 // app + hover close), title semibold, muted secondary text, DM Sans, inner
-// radius nested at outer-4. Media and the upload action sit under the title
-// where the system card puts its body.
+// radius nested at outer-4. Media and the upload/delete actions sit under the
+// title where the system card puts its body.
 
 import QtQuick
 import QtQuick.Layouts
@@ -23,6 +23,7 @@ BorderSurface {
 
   signal playRequested()
   signal uploadRequested()
+  signal deleteRequested()
   signal closeRequested()
 
   readonly property string resolvedPreviewSource: imageSource(image)
@@ -36,6 +37,12 @@ BorderSurface {
   readonly property color inset: Qt.rgba(1, 1, 1, 0.05)
   readonly property int innerRadius: Math.max(10, cornerRadius - 4)
   readonly property int mediaRadius: Style.space(10)
+  readonly property color danger: "#e5484d"
+  readonly property int actionSpacing: Style.space(8)
+  // Delete sits beside Upload when both fit at natural width; else it wraps
+  // onto its own row.
+  readonly property bool actionsInline: uploadRow.implicitWidth + deleteRow.implicitWidth
+    + 4 * Style.space(12) + actionSpacing <= actions.width
 
   function imageSource(src) {
     var value = String(src || "")
@@ -264,72 +271,135 @@ BorderSurface {
       }
     }
 
-    // Compact Upload to Loom button
-    Rectangle {
-      id: uploadAction
+    GridLayout {
+      id: actions
       Layout.fillWidth: true
       Layout.leftMargin: Style.space(16)
       Layout.rightMargin: Style.space(16)
       Layout.topMargin: Style.space(9)
       Layout.bottomMargin: Style.space(13)
-      Layout.preferredHeight: Style.space(38)
-      color: uploadMouse.containsMouse ? Util.alpha(root.accent, 0.18) : root.inset
-      radius: root.mediaRadius
-      border.width: Math.max(1, Math.round(Style.space(1)))
-      border.color: uploadMouse.containsMouse ? root.accent : root.hairline
+      columns: root.actionsInline ? 2 : 1
+      columnSpacing: root.actionsInline ? root.actionSpacing : 0
+      rowSpacing: root.actionSpacing
 
-      RowLayout {
-        anchors.fill: parent
-        anchors.leftMargin: Style.space(12)
-        anchors.rightMargin: Style.space(12)
-        spacing: Style.space(10)
+      // Compact Upload to Loom button
+      Rectangle {
+        id: uploadAction
+        Layout.fillWidth: true
+        Layout.preferredHeight: Style.space(38)
+        color: uploadMouse.containsMouse ? Util.alpha(root.accent, 0.18) : root.inset
+        radius: root.mediaRadius
+        border.width: Math.max(1, Math.round(Style.space(1)))
+        border.color: uploadMouse.containsMouse ? root.accent : root.hairline
 
-        Text {
-          text: "󰕒"
-          textFormat: Text.PlainText
-          color: root.accent
-          font.family: Style.font.family
-          font.pixelSize: Style.font.icon
-          renderType: Text.NativeRendering
-          Layout.alignment: Qt.AlignVCenter
+        RowLayout {
+          id: uploadRow
+          anchors.fill: parent
+          anchors.leftMargin: Style.space(12)
+          anchors.rightMargin: Style.space(12)
+          spacing: Style.space(10)
+
+          Text {
+            text: "󰕒"
+            textFormat: Text.PlainText
+            color: root.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.icon
+            renderType: Text.NativeRendering
+            Layout.alignment: Qt.AlignVCenter
+          }
+
+          Text {
+            text: "Upload to Loom"
+            textFormat: Text.PlainText
+            color: root.textColor
+            font.family: "DM Sans"
+            font.pixelSize: Style.font.subtitle
+            font.weight: Font.DemiBold
+            renderType: Text.NativeRendering
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            elide: Text.ElideRight
+          }
+
+          Text {
+            text: "›"
+            textFormat: Text.PlainText
+            color: root.accent
+            font.family: "DM Sans"
+            font.pixelSize: Style.font.heading
+            font.weight: Font.DemiBold
+            renderType: Text.NativeRendering
+            Layout.alignment: Qt.AlignVCenter
+          }
         }
 
-        Text {
-          text: "Upload to Loom"
-          textFormat: Text.PlainText
-          color: root.textColor
-          font.family: "DM Sans"
-          font.pixelSize: Style.font.subtitle
-          font.weight: Font.DemiBold
-          renderType: Text.NativeRendering
-          Layout.fillWidth: true
-          Layout.alignment: Qt.AlignVCenter
-          elide: Text.ElideRight
-        }
-
-        Text {
-          text: "›"
-          textFormat: Text.PlainText
-          color: root.accent
-          font.family: "DM Sans"
-          font.pixelSize: Style.font.heading
-          font.weight: Font.DemiBold
-          renderType: Text.NativeRendering
-          Layout.alignment: Qt.AlignVCenter
+        MouseArea {
+          id: uploadMouse
+          anchors.fill: parent
+          hoverEnabled: true
+          acceptedButtons: Qt.LeftButton | Qt.RightButton
+          cursorShape: Qt.PointingHandCursor
+          onClicked: function(mouse) {
+            if (mouse.button === Qt.RightButton) {
+              root.closeRequested()
+            } else {
+              root.uploadRequested()
+            }
+          }
         }
       }
 
-      MouseArea {
-        id: uploadMouse
-        anchors.fill: parent
-        hoverEnabled: true
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
-        cursorShape: Qt.PointingHandCursor
-        onClicked: function(mouse) {
-          if (mouse.button === Qt.RightButton) {
-            root.closeRequested()
-          } else {
-            root.uploadRequested()
+      // Delete recording button. Deletes on click, no confirmation.
+      Rectangle {
+        id: deleteAction
+        Layout.fillWidth: !root.actionsInline
+        Layout.preferredWidth: deleteRow.implicitWidth + 2 * Style.space(12)
+        Layout.preferredHeight: Style.space(38)
+        color: deleteMouse.containsMouse ? Util.alpha(root.danger, 0.18) : root.inset
+        radius: root.mediaRadius
+        border.width: Math.max(1, Math.round(Style.space(1)))
+        border.color: root.danger
+
+        RowLayout {
+          id: deleteRow
+          anchors.centerIn: parent
+          spacing: Style.space(8)
+
+          Text {
+            text: "󰆴"
+            textFormat: Text.PlainText
+            color: root.danger
+            font.family: Style.font.family
+            font.pixelSize: Style.font.icon
+            renderType: Text.NativeRendering
+            Layout.alignment: Qt.AlignVCenter
+          }
+
+          Text {
+            text: "Delete"
+            textFormat: Text.PlainText
+            color: root.danger
+            font.family: "DM Sans"
+            font.pixelSize: Style.font.subtitle
+            font.weight: Font.DemiBold
+            renderType: Text.NativeRendering
+            Layout.alignment: Qt.AlignVCenter
+          }
+        }
+
+        MouseArea {
+          id: deleteMouse
+          anchors.fill: parent
+          hoverEnabled: true
+          acceptedButtons: Qt.LeftButton | Qt.RightButton
+          cursorShape: Qt.PointingHandCursor
+          onClicked: function(mouse) {
+            if (mouse.button === Qt.RightButton) {
+              root.closeRequested()
+            } else {
+              root.deleteRequested()
+            }
           }
         }
       }
