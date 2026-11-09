@@ -2,12 +2,13 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 
 Item {
   id: root
 
   property var shell: null
-  property color accent: Color.urgent
+  property color accent: Commons.Color.urgent
   property var accents: []
   property int lastAccentIndex: -1
   property var queue: []
@@ -38,7 +39,7 @@ Item {
     var pool = loadedAccents()
     if (!pool || pool.length === 0) {
       lastAccentIndex = -1
-      return Color.urgent
+      return Commons.Color.urgent
     }
     if (pool.length === 1) {
       lastAccentIndex = 0

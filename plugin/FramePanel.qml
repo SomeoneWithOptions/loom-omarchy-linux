@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Layer-shell popup attached to a bar widget icon, designed for
@@ -45,7 +46,7 @@ PanelWindow {
   property int padding: Style.spacing.popupPadding
   property int contentWidth: Style.space(280)
   property int contentHeight: Style.space(200)
-  property var borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+  property var borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
   property bool centerOnBar: false
   property bool open: false
   property int gap: -1  // overlap top bar so panel grows directly from frame
@@ -408,7 +409,7 @@ PanelWindow {
     y: 0
     opacity: card.opacity
     cornerRadius: Style.cornerRadius
-    frameColor: Color.popups.background
+    frameColor: Commons.Color.popups.background
   }
 
   FrameJoin {
@@ -419,7 +420,7 @@ PanelWindow {
     y: 0
     opacity: card.opacity
     cornerRadius: Style.cornerRadius
-    frameColor: Color.popups.background
+    frameColor: Commons.Color.popups.background
     transform: Scale { origin.x: topRightFrameJoin.width / 2; xScale: -1 }
   }
 
@@ -432,7 +433,7 @@ PanelWindow {
     y: 0
     width: root.frameInset
     height: card.height
-    color: Color.popups.background
+    color: Commons.Color.popups.background
     opacity: card.opacity
   }
 
@@ -443,7 +444,7 @@ PanelWindow {
     y: card.height
     opacity: card.opacity
     cornerRadius: Style.cornerRadius
-    frameColor: Color.popups.background
+    frameColor: Commons.Color.popups.background
   }
 
   BorderSurface {
@@ -453,7 +454,7 @@ PanelWindow {
     y: 0
     width: root.contentWidth
     height: root.contentHeight
-    color: Color.popups.background
+    color: Commons.Color.popups.background
     borderSpec: root.barPos === "top" ? Border.none() : root.borderSpec
     padding: root.padding
     radius: Style.cornerRadius

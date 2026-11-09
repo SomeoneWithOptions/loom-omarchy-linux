@@ -8,6 +8,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 BorderSurface {
@@ -16,7 +17,7 @@ BorderSurface {
   property string summary: ""
   property string image: ""
   property string recordingPath: ""
-  property color accent: Color.urgent
+  property color accent: Commons.Color.urgent
   property int cornerRadius: 0
 
   readonly property bool hovered: hoverTracker.hovered
@@ -30,9 +31,9 @@ BorderSurface {
 
   // Same palette derivation as the system card so both stacks read as one
   // surface: card lifted off the drawer, text at full / 62% opacity.
-  readonly property color textColor: Color.notifications.text
+  readonly property color textColor: Commons.Color.notifications.text
   readonly property color secondaryColor: Qt.rgba(textColor.r, textColor.g, textColor.b, 0.62)
-  readonly property color cardBg: Qt.lighter(Color.notifications.background, 1.1)
+  readonly property color cardBg: Qt.lighter(Commons.Color.notifications.background, 1.1)
   readonly property color hairline: Qt.rgba(1, 1, 1, 0.09)
   readonly property color inset: Qt.rgba(1, 1, 1, 0.05)
   readonly property int innerRadius: Math.max(10, cornerRadius - 4)
@@ -186,7 +187,7 @@ BorderSurface {
       // Intentional placeholder when image is missing or failed to load
       Rectangle {
         anchors.fill: parent
-        color: Qt.darker(Color.notifications.background, 1.15)
+        color: Qt.darker(Commons.Color.notifications.background, 1.15)
         radius: parent.radius
         visible: !root.resolvedPreviewSource || previewImage.status !== Image.Ready
 
